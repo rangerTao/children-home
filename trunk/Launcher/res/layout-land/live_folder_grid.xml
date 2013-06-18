@@ -27,29 +27,24 @@
         android:textSize="14sp"
         android:textColor="#404040"
         android:textStyle="bold"
-        android:layout_width="match_parent"
+        android:layout_width="fill_parent"
     	android:layout_height="wrap_content" />
 
-    <FrameLayout
-         android:layout_width="match_parent"
-	   android:layout_height="0dip"
-         android:layout_weight="1"
-         android:background="@drawable/box_launcher_bottom">
+    <GridView
+        android:id="@+id/folder_content"
+        android:layout_width="fill_parent"
+    	android:layout_height="0dip"
+    	android:layout_weight="1"
+            
+        android:cacheColorHint="#00000000"
+        android:background="@drawable/box_launcher_bottom"
 
-        <GridView
-             android:id="@+id/folder_content"
-             android:layout_width="match_parent"
-             android:layout_height="match_parent"
+        android:scrollbarAlwaysDrawVerticalTrack="true"
+        android:scrollbarStyle="insideInset"
+        android:drawSelectorOnTop="false"
+        android:listSelector="@drawable/grid_selector"
 
-             android:cacheColorHint="#ff333333"
-
-             android:scrollbarAlwaysDrawVerticalTrack="true"
-             android:scrollbarStyle="insideInset"
-             android:drawSelectorOnTop="false"
-             android:listSelector="@drawable/grid_selector"
-
-             android:verticalSpacing="10dip"
-             android:numColumns="5" />
-    </FrameLayout>
+        android:verticalSpacing="10dip"
+        android:numColumns="5" />
 
 </com.ranger.launcher.child.LiveFolder>

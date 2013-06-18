@@ -16,28 +16,36 @@
 
 package com.ranger.launcher.child;
 
-import android.widget.ImageView;
+import com.ranger.launcher.child.R;
+
 import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.content.res.TypedArray;
-import android.graphics.Paint;
-import android.graphics.PorterDuff;
-import android.graphics.PorterDuffColorFilter;
 import android.graphics.Rect;
+import android.graphics.RectF;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.TransitionDrawable;
+import android.net.Uri;
+import android.os.Handler;
 import android.util.AttributeSet;
+import android.util.Log;
 import android.view.View;
-import android.view.animation.TranslateAnimation;
-import android.view.animation.Animation;
-import android.view.animation.AnimationSet;
+import android.view.ViewGroup.MarginLayoutParams;
 import android.view.animation.AccelerateInterpolator;
 import android.view.animation.AlphaAnimation;
-import android.graphics.RectF;
-import android.graphics.drawable.TransitionDrawable;
-
+import android.view.animation.Animation;
+import android.view.animation.AnimationSet;
+import android.view.animation.TranslateAnimation;
+import android.widget.ImageView;
+import android.widget.Toast;
 
 public class DeleteZone extends ImageView implements DropTarget, DragController.DragListener {
     private static final int ORIENTATION_HORIZONTAL = 1;
     private static final int TRANSITION_DURATION = 250;
     private static final int ANIMATION_DURATION = 200;
+	private static final String LOG_TAG = "DeleteZone";
 
     private final int[] mLocation = new int[2];
     
@@ -50,12 +58,22 @@ public class DeleteZone extends ImageView implements DropTarget, DragController.
     private Animation mHandleOutAnimation;
 
     private int mOrientation;
-    private DragController mDragController;
+    private DragLayer mDragLayer;
 
     private final RectF mRegion = new RectF();
     private TransitionDrawable mTransition;
     private View mHandle;
-    private final Paint mTrashPaint = new Paint();
+    private boolean shouldUninstall=false;
+    private Handler mHandler = new Handler();
+	private boolean mUninstallTarget=false;
+	String UninstallPkg = null;
+	//ADW: We need to move the DeleteZone if Dockbar is open 
+	private int mCustomPadding=60;
+	private boolean mTrickyLocation=false;
+
+    public DeleteZone(Context context) {
+        super(context);
+    }
 
     public DeleteZone(Context context, AttributeSet attrs) {
         this(context, attrs, 0);
@@ -64,111 +82,194 @@ public class DeleteZone extends ImageView implements DropTarget, DragController.
     public DeleteZone(Context context, AttributeSet attrs, int defStyle) {
         super(context, attrs, defStyle);
 
-        final int srcColor = context.getResources().getColor(R.color.delete_color_filter);
-        mTrashPaint.setColorFilter(new PorterDuffColorFilter(srcColor, PorterDuff.Mode.SRC_ATOP));
-
         TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.DeleteZone, defStyle, 0);
         mOrientation = a.getInt(R.styleable.DeleteZone_direction, ORIENTATION_HORIZONTAL);
         a.recycle();
     }
 
-    @Override
+    /*@Override
     protected void onFinishInflate() {
         super.onFinishInflate();
-        mTransition = (TransitionDrawable) getDrawable();
-    }
+        mTransition = (TransitionDrawable) getBackground();
+    }*/
 
     public boolean acceptDrop(DragSource source, int x, int y, int xOffset, int yOffset,
-            DragView dragView, Object dragInfo) {
+            Object dragInfo) {
         return true;
     }
     
-    public Rect estimateDropLocation(DragSource source, int x, int y, int xOffset, int yOffset,
-            DragView dragView, Object dragInfo, Rect recycle) {
+    public Rect estimateDropLocation(DragSource source, int x, int y, int xOffset, int yOffset, Object dragInfo, Rect recycle) {
         return null;
     }
 
-    public void onDrop(DragSource source, int x, int y, int xOffset, int yOffset,
-            DragView dragView, Object dragInfo) {
+    public void onDrop(DragSource source, int x, int y, int xOffset, int yOffset, Object dragInfo) {
         final ItemInfo item = (ItemInfo) dragInfo;
 
         if (item.container == -1) return;
 
+        final LauncherModel model = Launcher.getModel();
         if (item.container == LauncherSettings.Favorites.CONTAINER_DESKTOP) {
             if (item instanceof LauncherAppWidgetInfo) {
-                mLauncher.removeAppWidget((LauncherAppWidgetInfo) item);
+                model.removeDesktopAppWidget((LauncherAppWidgetInfo) item);
+            } else {
+                model.removeDesktopItem(item);
             }
         } else {
             if (source instanceof UserFolder) {
                 final UserFolder userFolder = (UserFolder) source;
                 final UserFolderInfo userFolderInfo = (UserFolderInfo) userFolder.getInfo();
-                // Item must be a ShortcutInfo otherwise it couldn't have been in the folder
-                // in the first place.
-                userFolderInfo.remove((ShortcutInfo)item);
+                model.removeUserFolderItem(userFolderInfo, item);
             }
         }
         if (item instanceof UserFolderInfo) {
             final UserFolderInfo userFolderInfo = (UserFolderInfo)item;
             LauncherModel.deleteUserFolderContentsFromDatabase(mLauncher, userFolderInfo);
-            mLauncher.removeFolder(userFolderInfo);
+            model.removeUserFolder(userFolderInfo);
         } else if (item instanceof LauncherAppWidgetInfo) {
             final LauncherAppWidgetInfo launcherAppWidgetInfo = (LauncherAppWidgetInfo) item;
             final LauncherAppWidgetHost appWidgetHost = mLauncher.getAppWidgetHost();
+            mLauncher.getWorkspace().unbindWidgetScrollableId(launcherAppWidgetInfo.appWidgetId);
             if (appWidgetHost != null) {
-                final int appWidgetId = launcherAppWidgetInfo.appWidgetId;
-                // Deleting an app widget ID is a void call but writes to disk before returning
-                // to the caller...
-                new Thread("deleteAppWidgetId") {
-                    public void run() {
-                        appWidgetHost.deleteAppWidgetId(launcherAppWidgetInfo.appWidgetId);
-                    }
-                }.start();
+                appWidgetHost.deleteAppWidgetId(launcherAppWidgetInfo.appWidgetId);
             }
         }
         LauncherModel.deleteItemFromDatabase(mLauncher, item);
     }
 
     public void onDragEnter(DragSource source, int x, int y, int xOffset, int yOffset,
-            DragView dragView, Object dragInfo) {
-        mTransition.reverseTransition(TRANSITION_DURATION);
-        dragView.setPaint(mTrashPaint);
+            Object dragInfo) {
+    	//ADW: show uninstall message
+    	final ItemInfo item = (ItemInfo) dragInfo;
+    	if (item instanceof ApplicationInfo){
+	    	mTransition.reverseTransition(TRANSITION_DURATION);
+	    	mUninstallTarget = true;
+	        mHandler.removeCallbacks(mShowUninstaller);
+	        mHandler.postDelayed(mShowUninstaller, 1000);
+    	}
     }
 
     public void onDragOver(DragSource source, int x, int y, int xOffset, int yOffset,
-            DragView dragView, Object dragInfo) {
+            Object dragInfo) {
     }
 
     public void onDragExit(DragSource source, int x, int y, int xOffset, int yOffset,
-            DragView dragView, Object dragInfo) {
+            Object dragInfo) {
         mTransition.reverseTransition(TRANSITION_DURATION);
-        dragView.setPaint(null);
+        //ADW: not show uninstall message
+        //ADW We need to call this delayed cause onDragExit is always called just before onDragEnd :(
+    	mHandler.removeCallbacks(mShowUninstaller);
+        if(shouldUninstall){
+	        mUninstallTarget = false;
+	        mHandler.postDelayed(mShowUninstaller, 100);
+        }
     }
 
-    public void onDragStart(DragSource source, Object info, int dragAction) {
+    public void onDragStart(View v, DragSource source, Object info, int dragAction) {
         final ItemInfo item = (ItemInfo) info;
+        //ADW: we need to know how much the view will we moved
+        mCustomPadding=mLauncher.getTrashPadding();
         if (item != null) {
             mTrashMode = true;
             createAnimations();
             final int[] location = mLocation;
             getLocationOnScreen(location);
-            mRegion.set(location[0], location[1], location[0] + mRight - mLeft,
-                    location[1] + mBottom - mTop);
-            mDragController.setDeleteRegion(mRegion);
+            if(mLauncher.isDockBarOpen()){
+            	MarginLayoutParams tmp=(MarginLayoutParams) getLayoutParams();
+            	if(mOrientation==ORIENTATION_HORIZONTAL){
+            		tmp.bottomMargin=mCustomPadding;
+            		tmp.rightMargin=0;
+            	}else{
+            		tmp.bottomMargin=0;
+            		tmp.rightMargin=mCustomPadding;
+            	}
+            	setLayoutParams(tmp);
+                //TODO: ADW we need to hack the real location the first time we move the trash can
+                if(!mTrickyLocation){
+                    if(mOrientation==ORIENTATION_HORIZONTAL){
+                    	mRegion.set(location[0], location[1]-mCustomPadding, location[0] + mRight - mLeft,
+                            location[1] + mBottom - mTop-mCustomPadding);
+                    }else{
+                    	mRegion.set(location[0]-mCustomPadding, location[1], location[0] + mRight - mLeft -mCustomPadding,
+                                location[1] + mBottom - mTop);
+                    }
+                    mTrickyLocation=true;
+                }else{
+                    mRegion.set(location[0], location[1], location[0] + mRight - mLeft,
+                            location[1] + mBottom - mTop);
+                }
+            }else{
+            	MarginLayoutParams tmp=(MarginLayoutParams) getLayoutParams();
+        		tmp.bottomMargin=0;
+        		tmp.rightMargin=0;
+            	setLayoutParams(tmp);
+                //TODO: ADW we need to hack the real location the first time we move the trash can
+                if(mTrickyLocation){
+                	if(mOrientation==ORIENTATION_HORIZONTAL){
+                		mRegion.set(location[0], location[1]+mCustomPadding, location[0] + mRight - mLeft,
+                            location[1] + mBottom - mTop+mCustomPadding);
+                	}else{
+                		mRegion.set(location[0]+mCustomPadding, location[1], location[0] + mRight - mLeft+mCustomPadding,
+                                location[1] + mBottom - mTop);
+                	}
+                    mTrickyLocation=false;
+                }else{
+                    mRegion.set(location[0], location[1], location[0] + mRight - mLeft,
+                            location[1] + mBottom - mTop);
+                }
+            }
+            mDragLayer.setDeleteRegion(mRegion);
             mTransition.resetTransition();
             startAnimation(mInAnimation);
-            mHandle.startAnimation(mHandleOutAnimation);
+            if(!mLauncher.isDockBarOpen()){
+            	mHandle.startAnimation(mHandleOutAnimation);
+            }
             setVisibility(VISIBLE);
+            
+            //ADW Store app data for uninstall if its an Application
+            //ADW Thanks to irrenhaus@xda & Rogro82@xda :)
+			if(item instanceof ApplicationInfo){
+				try{
+					final ApplicationInfo appInfo=(ApplicationInfo) item;
+		            if(appInfo.iconResource != null)
+						UninstallPkg = appInfo.iconResource.packageName;
+					else
+					{
+						PackageManager mgr = DeleteZone.this.getContext().getPackageManager();
+						ResolveInfo res = mgr.resolveActivity(appInfo.intent, 0);
+						UninstallPkg = res.activityInfo.packageName;
+					}
+				}catch (Exception e) {
+					Log.w(LOG_TAG, "Could not load shortcut icon: " + item);
+					UninstallPkg=null;
+				}
+			}            
         }
     }
 
     public void onDragEnd() {
         if (mTrashMode) {
             mTrashMode = false;
-            mDragController.setDeleteRegion(null);
+            mDragLayer.setDeleteRegion(null);
             startAnimation(mOutAnimation);
-            mHandle.startAnimation(mHandleInAnimation);
+            if(!mLauncher.isDockBarOpen()){
+            	mHandle.startAnimation(mHandleInAnimation);
+            }
+            if(mLauncher.isDockBarOpen()){
+            	MarginLayoutParams tmp=(MarginLayoutParams) getLayoutParams();
+            	if(mOrientation==ORIENTATION_HORIZONTAL){
+            		tmp.bottomMargin=0;
+            	}else{
+            		tmp.rightMargin=0;
+            	}
+            	setLayoutParams(tmp);
+            }
             setVisibility(GONE);
         }
+        if(shouldUninstall && UninstallPkg!=null){
+			Intent uninstallIntent = new Intent(Intent.ACTION_DELETE, Uri.parse("package:"+UninstallPkg));
+			DeleteZone.this.getContext().startActivity(uninstallIntent);
+        }
+        
     }
 
     private void createAnimations() {
@@ -189,7 +290,15 @@ public class DeleteZone extends ImageView implements DropTarget, DragController.
             animationSet.setDuration(ANIMATION_DURATION);
         }
         if (mHandleInAnimation == null) {
-            mHandleInAnimation = new AlphaAnimation(0.0f, 1.0f);
+            if (mOrientation == ORIENTATION_HORIZONTAL) {
+                mHandleInAnimation = new TranslateAnimation(Animation.ABSOLUTE, 0.0f,
+                        Animation.ABSOLUTE, 0.0f, Animation.RELATIVE_TO_SELF, 1.0f,
+                        Animation.RELATIVE_TO_SELF, 0.0f);
+            } else {
+                mHandleInAnimation = new TranslateAnimation(Animation.RELATIVE_TO_SELF,
+                        1.0f, Animation.RELATIVE_TO_SELF, 0.0f, Animation.ABSOLUTE, 0.0f,
+                        Animation.ABSOLUTE, 0.0f);
+            }
             mHandleInAnimation.setDuration(ANIMATION_DURATION);
         }
         if (mOutAnimation == null) {
@@ -209,7 +318,15 @@ public class DeleteZone extends ImageView implements DropTarget, DragController.
             animationSet.setDuration(ANIMATION_DURATION);
         }
         if (mHandleOutAnimation == null) {
-            mHandleOutAnimation = new AlphaAnimation(1.0f, 0.0f);
+            if (mOrientation == ORIENTATION_HORIZONTAL) {
+                mHandleOutAnimation = new FastTranslateAnimation(Animation.ABSOLUTE, 0.0f,
+                        Animation.ABSOLUTE, 0.0f, Animation.RELATIVE_TO_SELF, 0.0f,
+                        Animation.RELATIVE_TO_SELF, 1.0f);
+            } else {
+                mHandleOutAnimation = new FastTranslateAnimation(Animation.RELATIVE_TO_SELF,
+                        0.0f, Animation.RELATIVE_TO_SELF, 1.0f, Animation.ABSOLUTE, 0.0f,
+                        Animation.ABSOLUTE, 0.0f);
+            }
             mHandleOutAnimation.setFillAfter(true);
             mHandleOutAnimation.setDuration(ANIMATION_DURATION);
         }
@@ -219,8 +336,8 @@ public class DeleteZone extends ImageView implements DropTarget, DragController.
         mLauncher = launcher;
     }
 
-    void setDragController(DragController dragController) {
-        mDragController = dragController;
+    void setDragController(DragLayer dragLayer) {
+        mDragLayer = dragLayer;
     }
 
     void setHandle(View view) {
@@ -260,4 +377,20 @@ public class DeleteZone extends ImageView implements DropTarget, DragController.
             return false;
         }
     }
+    //ADW Runnable to show the uninstall message (or reset the uninstall status)
+    private Runnable mShowUninstaller = new Runnable() {
+		public void run() {
+    	       shouldUninstall=mUninstallTarget;
+    	       if(shouldUninstall){
+    	    	   Toast.makeText(mContext, R.string.drop_to_uninstall, 500).show();
+    	       }
+		}
+    };
+
+	@Override
+	public void setBackgroundDrawable(Drawable d) {
+		// TODO Auto-generated method stub
+		super.setBackgroundDrawable(d);
+        mTransition = (TransitionDrawable) d;
+	}
 }

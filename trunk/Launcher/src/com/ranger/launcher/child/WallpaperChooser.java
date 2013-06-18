@@ -18,7 +18,6 @@ package com.ranger.launcher.child;
 
 import android.app.Activity;
 import android.app.WallpaperManager;
-import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.BitmapFactory;
 import android.graphics.Bitmap;
@@ -39,9 +38,10 @@ import android.widget.ImageView;
 import java.io.IOException;
 import java.util.ArrayList;
 
+import com.ranger.launcher.child.R;
+
 public class WallpaperChooser extends Activity implements AdapterView.OnItemSelectedListener,
         OnClickListener {
-    private static final String TAG = "Launcher.WallpaperChooser";
 
     private Gallery mGallery;
     private ImageView mImageView;
@@ -77,11 +77,7 @@ public class WallpaperChooser extends Activity implements AdapterView.OnItemSele
         mImages = new ArrayList<Integer>(24);
 
         final Resources resources = getResources();
-        // Context.getPackageName() may return the "original" package name,
-        // com.android.launcher2; Resources needs the real package name,
-        // com.android.launcher. So we ask Resources for what it thinks the
-        // package name should be.
-        final String packageName = resources.getResourcePackageName(R.array.wallpapers);
+        final String packageName = getApplication().getPackageName();
 
         addWallpapers(resources, packageName, R.array.wallpapers);
         addWallpapers(resources, packageName, R.array.extra_wallpapers);
@@ -98,7 +94,6 @@ public class WallpaperChooser extends Activity implements AdapterView.OnItemSele
                 if (thumbRes != 0) {
                     mThumbs.add(thumbRes);
                     mImages.add(res);
-                    // Log.d(TAG, "addWallpapers: [" + packageName + "]: " + extra + " (" + res + ")");
                 }
             }
         }
@@ -139,12 +134,12 @@ public class WallpaperChooser extends Activity implements AdapterView.OnItemSele
 
         mIsWallpaperSet = true;
         try {
-            WallpaperManager wpm = (WallpaperManager)getSystemService(Context.WALLPAPER_SERVICE);
+            WallpaperManager wpm = (WallpaperManager)getSystemService(WALLPAPER_SERVICE);
             wpm.setResource(mImages.get(position));
             setResult(RESULT_OK);
             finish();
         } catch (IOException e) {
-            Log.e(TAG, "Failed to set wallpaper: " + e);
+            Log.e(Launcher.LOG_TAG, "Failed to set wallpaper: " + e);
         }
     }
 
@@ -185,8 +180,9 @@ public class WallpaperChooser extends Activity implements AdapterView.OnItemSele
             if (thumbDrawable != null) {
                 thumbDrawable.setDither(true);
             } else {
-                Log.e(TAG, "Error decoding thumbnail resId=" + thumbRes + " for wallpaper #"
-                        + position);
+                Log.e(Launcher.LOG_TAG, String.format(
+                    "Error decoding thumbnail resId=%d for wallpaper #%d",
+                    thumbRes, position));
             }
             return image;
         }
@@ -212,7 +208,7 @@ public class WallpaperChooser extends Activity implements AdapterView.OnItemSele
                         mImages.get(params[0]), mOptions);
             } catch (OutOfMemoryError e) {
                 return null;
-            }
+            }            
         }
 
         @Override

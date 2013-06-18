@@ -19,7 +19,6 @@ package com.ranger.launcher.child;
 import android.content.ContentValues;
 import android.content.Intent;
 import android.graphics.drawable.Drawable;
-import android.graphics.Bitmap;
 import android.net.Uri;
 
 class LiveFolderInfo extends FolderInfo {
@@ -42,7 +41,12 @@ class LiveFolderInfo extends FolderInfo {
     /**
      * The live folder icon.
      */
-    Bitmap icon;
+    Drawable icon;
+
+    /**
+     * When set to true, indicates that the icon has been resized.
+     */
+    boolean filtered;
 
     /**
      * Reference to the live folder icon as an application's resource.

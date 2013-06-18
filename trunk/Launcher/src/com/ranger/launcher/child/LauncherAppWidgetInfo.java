@@ -25,8 +25,7 @@ import android.content.ContentValues;
 class LauncherAppWidgetInfo extends ItemInfo {
 
     /**
-     * Identifier for this widget when talking with
-     * {@link android.appwidget.AppWidgetManager} for updates.
+     * Identifier for this widget when talking with {@link AppWidgetManager} for updates.
      */
     int appWidgetId;
     
@@ -49,13 +48,6 @@ class LauncherAppWidgetInfo extends ItemInfo {
 
     @Override
     public String toString() {
-        return "AppWidget(id=" + Integer.toString(appWidgetId) + ")";
-    }
-
-
-    @Override
-    void unbind() {
-        super.unbind();
-        hostView = null;
+        return Integer.toString(appWidgetId);
     }
 }

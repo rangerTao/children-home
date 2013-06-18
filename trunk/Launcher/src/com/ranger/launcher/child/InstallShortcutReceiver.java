@@ -16,6 +16,8 @@
 
 package com.ranger.launcher.child;
 
+import com.ranger.launcher.child.R;
+
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -25,7 +27,7 @@ import android.widget.Toast;
 
 public class InstallShortcutReceiver extends BroadcastReceiver {
     private static final String ACTION_INSTALL_SHORTCUT =
-            "com.android.launcher.action.INSTALL_SHORTCUT";
+            "com.ranger.launcher.child.action.INSTALL_SHORTCUT";
 
     private final int[] mCoordinates = new int[2];
 
@@ -38,7 +40,8 @@ public class InstallShortcutReceiver extends BroadcastReceiver {
 
         if (!installShortcut(context, data, screen)) {
             // The target screen is full, let's try the other screens
-            for (int i = 0; i < Launcher.SCREEN_COUNT; i++) {
+        	final int count=Launcher.getScreenCount(context);
+            for (int i = 0; i < count; i++) {
                 if (i != screen && installShortcut(context, data, i)) break;
             }
         }
@@ -63,8 +66,7 @@ public class InstallShortcutReceiver extends BroadcastReceiver {
             // different places)
             boolean duplicate = data.getBooleanExtra(Launcher.EXTRA_SHORTCUT_DUPLICATE, true);
             if (duplicate || !LauncherModel.shortcutExists(context, name, intent)) {
-                ((LauncherApplication)context.getApplicationContext()).getModel()
-                        .addShortcut(context, data, cell, true);
+                Launcher.addShortcut(context, data, cell, true);
                 Toast.makeText(context, context.getString(R.string.shortcut_installed, name),
                         Toast.LENGTH_SHORT).show();
             } else {

@@ -26,9 +26,11 @@ import android.widget.Toast;
 
 import java.net.URISyntaxException;
 
+import com.ranger.launcher.child.R;
+
 public class UninstallShortcutReceiver extends BroadcastReceiver {
     private static final String ACTION_UNINSTALL_SHORTCUT =
-            "com.android.launcher.action.UNINSTALL_SHORTCUT";
+            "com.ranger.launcher.child.action.UNINSTALL_SHORTCUT";
 
     public void onReceive(Context context, Intent data) {
         if (!ACTION_UNINSTALL_SHORTCUT.equals(data.getAction())) {

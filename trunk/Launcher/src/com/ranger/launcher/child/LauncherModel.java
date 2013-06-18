@@ -16,113 +16,1344 @@
 
 package com.ranger.launcher.child;
 
-import android.appwidget.AppWidgetManager;
-import android.appwidget.AppWidgetProviderInfo;
-import android.content.BroadcastReceiver;
-import android.content.ComponentName;
-import android.content.ContentProviderClient;
-import android.content.ContentResolver;
-import android.content.ContentValues;
-import android.content.Intent;
-import android.content.Intent.ShortcutIconResource;
-import android.content.Context;
-import android.content.pm.ActivityInfo;
-import android.content.pm.PackageManager;
-import android.content.pm.ProviderInfo;
-import android.content.pm.ResolveInfo;
-import android.content.res.Resources;
-import android.database.Cursor;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
-import android.net.Uri;
-import android.os.Handler;
-import android.os.HandlerThread;
-import android.os.Parcelable;
-import android.os.RemoteException;
-import android.util.Log;
-import android.os.Process;
-import android.os.SystemClock;
+import static android.util.Log.d;
+import static android.util.Log.e;
+import static android.util.Log.w;
 
 import java.lang.ref.WeakReference;
 import java.net.URISyntaxException;
 import java.text.Collator;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import com.ranger.launcher.child.R;
+import com.ranger.launcher.child.IconShader.CompiledIconShader;
+import com.ranger.launcher.child.catalogue.AppCatalogueFilters;
+
+import android.content.ComponentName;
+import android.content.ContentResolver;
+import android.content.ContentValues;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
+import android.content.pm.PackageManager.NameNotFoundException;
+import android.content.res.Resources;
+import android.content.res.XmlResourceParser;
+import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Rect;
+import android.graphics.drawable.Drawable;
+import android.net.Uri;
+import android.os.Process;
 
 /**
  * Maintains in-memory state of the Launcher. It is expected that there should be only one
  * LauncherModel object held in a static. Also provide APIs for updating the database state
  * for the Launcher.
  */
-public class LauncherModel extends BroadcastReceiver {
-    static final boolean DEBUG_LOADERS = false;
-    static final String TAG = "Launcher.Model";
+public class LauncherModel {
+    static final boolean DEBUG_LOADERS = true;
+    static final String LOG_TAG = "HomeLoaders";
 
-    private static final int ITEMS_CHUNK = 6; // batch size for the workspace icons
-    private int mBatchSize; // 0 is all apps at once
-    private int mAllAppsLoadDelay; // milliseconds between batches
+    private static final int UI_NOTIFICATION_RATE = 4;
+    private static final int DEFAULT_APPLICATIONS_NUMBER = 42;
+    private static final int INITIAL_ICON_CACHE_CAPACITY = 50;
 
-    private final LauncherApplication mApp;
-    private final Object mLock = new Object();
-    private DeferredHandler mHandler = new DeferredHandler();
-    private LoaderTask mLoaderTask;
+    private static final Collator sCollator = Collator.getInstance();
 
-    private static final HandlerThread sWorkerThread = new HandlerThread("launcher-loader");
-    static {
-        sWorkerThread.start();
-    }
-    private static final Handler sWorker = new Handler(sWorkerThread.getLooper());
+    private boolean mApplicationsLoaded;
+    private boolean mDesktopItemsLoaded;
 
-    // We start off with everything not loaded.  After that, we assume that
-    // our monitoring of the package manager provides all updates and we never
-    // need to do a requery.  These are only ever touched from the loader thread.
-    private boolean mWorkspaceLoaded;
-    private boolean mAllAppsLoaded;
+    private ArrayList<ItemInfo> mDesktopItems;
+    private ArrayList<LauncherAppWidgetInfo> mDesktopAppWidgets;
+    private HashMap<Long, FolderInfo> mFolders;
 
-    private WeakReference<Callbacks> mCallbacks;
+    public static ArrayList<ApplicationInfo> mApplications;
 
-    private AllAppsList mAllAppsList; // only access in worker thread
-    private IconCache mIconCache;
-    final ArrayList<ItemInfo> mItems = new ArrayList<ItemInfo>();
-    final ArrayList<LauncherAppWidgetInfo> mAppWidgets = new ArrayList<LauncherAppWidgetInfo>();
-    final HashMap<Long, FolderInfo> mFolders = new HashMap<Long, FolderInfo>();
+    public static ApplicationsAdapter mApplicationsAdapter;
+    private ApplicationsLoader mApplicationsLoader;
+    private DesktopItemsLoader mDesktopItemsLoader;
+    private Thread mApplicationsLoaderThread;
+    private Thread mDesktopLoaderThread;
+    private int mDesktopColumns;
+    private int mDesktopRows;
+    private final HashMap<ComponentName, ApplicationInfo> mAppInfoCache =
+            new HashMap<ComponentName, ApplicationInfo>(INITIAL_ICON_CACHE_CAPACITY);
 
-    private Bitmap mDefaultIcon;
+    private static String compiledIconShaderName;
+    private static CompiledIconShader compiledIconShader;
 
-    public interface Callbacks {
-        public boolean setLoadOnResume();
-        public int getCurrentWorkspaceScreen();
-        public void startBinding();
-        public void bindItems(ArrayList<ItemInfo> shortcuts, int start, int end);
-        public void bindFolders(HashMap<Long,FolderInfo> folders);
-        public void finishBindingItems();
-        public void bindAppWidget(LauncherAppWidgetInfo info);
-        public void bindAllApplications(ArrayList<ApplicationInfo> apps);
-        public void bindAppsAdded(ArrayList<ApplicationInfo> apps);
-        public void bindAppsUpdated(ArrayList<ApplicationInfo> apps);
-        public void bindAppsRemoved(ArrayList<ApplicationInfo> apps, boolean permanent);
-        public boolean isAllAppsVisible();
+    synchronized void abortLoaders() {
+        if (DEBUG_LOADERS) d(LOG_TAG, "aborting loaders");
+
+        if (mApplicationsLoader != null && mApplicationsLoader.isRunning()) {
+            if (DEBUG_LOADERS) d(LOG_TAG, "  --> aborting applications loader");
+            mApplicationsLoader.stop();
+        }
+
+        if (mDesktopItemsLoader != null && mDesktopItemsLoader.isRunning()) {
+            if (DEBUG_LOADERS) d(LOG_TAG, "  --> aborting workspace loader");
+            mDesktopItemsLoader.stop();
+            mDesktopItemsLoaded = false;
+        }
     }
 
-    LauncherModel(LauncherApplication app, IconCache iconCache) {
-        mApp = app;
-        mAllAppsList = new AllAppsList(iconCache);
-        mIconCache = iconCache;
-
-        mDefaultIcon = Utilities.createIconBitmap(
-                app.getPackageManager().getDefaultActivityIcon(), app);
-
-        mAllAppsLoadDelay = app.getResources().getInteger(R.integer.config_allAppsBatchLoadDelay);
-
-        mBatchSize = app.getResources().getInteger(R.integer.config_allAppsBatchSize);
+    /**
+     * Drop our cache of components to their lables & icons.  We do
+     * this from Launcher when applications are added/removed.  It's a
+     * bit overkill, but it's a rare operation anyway.
+     */
+    synchronized void dropApplicationCache() {
+        mAppInfoCache.clear();
     }
 
-    public Bitmap getFallbackIcon() {
-        return Bitmap.createBitmap(mDefaultIcon);
+    /**
+     * Loads the list of installed applications in mApplications.
+     *
+     * @return true if the applications loader must be started
+     *         (see startApplicationsLoader()), false otherwise.
+     */
+    synchronized boolean loadApplications(boolean isLaunching, Launcher launcher,
+            boolean localeChanged) {
+
+        if (DEBUG_LOADERS) d(LOG_TAG, "load applications");
+
+        if (isLaunching && mApplicationsLoaded && !localeChanged) {
+            mApplicationsAdapter = new ApplicationsAdapter(launcher, mApplications,
+            		AppCatalogueFilters.getInstance().getDrawerFilter());
+            if (DEBUG_LOADERS) d(LOG_TAG, "  --> applications loaded, return");
+            return false;
+        }
+
+        stopAndWaitForApplicationsLoader();
+
+        if (localeChanged) {
+            dropApplicationCache();
+        }
+
+        if (mApplicationsAdapter == null || isLaunching || localeChanged) {
+            mApplications = new ArrayList<ApplicationInfo>(DEFAULT_APPLICATIONS_NUMBER);
+            mApplicationsAdapter = new ApplicationsAdapter(launcher, mApplications,
+            		AppCatalogueFilters.getInstance().getDrawerFilter());
+        }
+
+        mApplicationsLoaded = false;
+
+        if (!isLaunching) {
+            startApplicationsLoaderLocked(launcher, false);
+            return false;
+        }
+
+        return true;
+    }
+
+    private synchronized void stopAndWaitForApplicationsLoader() {
+        if (mApplicationsLoader != null && mApplicationsLoader.isRunning()) {
+            if (DEBUG_LOADERS) {
+                d(LOG_TAG, "  --> wait for applications loader (" + mApplicationsLoader.mId + ")");
+            }
+
+            mApplicationsLoader.stop();
+            // Wait for the currently running thread to finish, this can take a little
+            // time but it should be well below the timeout limit
+            try {
+                mApplicationsLoaderThread.join();
+            } catch (InterruptedException e) {
+                e(LOG_TAG, "mApplicationsLoaderThread didn't exit in time");
+            }
+        }
+    }
+
+    private synchronized void startApplicationsLoader(Launcher launcher, boolean isLaunching) {
+        if (DEBUG_LOADERS) d(LOG_TAG, "  --> starting applications loader unlocked");
+        startApplicationsLoaderLocked(launcher, isLaunching);
+    }
+
+    private void startApplicationsLoaderLocked(Launcher launcher, boolean isLaunching) {
+        if (DEBUG_LOADERS) d(LOG_TAG, "  --> starting applications loader");
+
+        stopAndWaitForApplicationsLoader();
+
+        mApplicationsLoader = new ApplicationsLoader(launcher, isLaunching);
+        mApplicationsLoaderThread = new Thread(mApplicationsLoader, "Applications Loader");
+        mApplicationsLoaderThread.start();
+    }
+
+    synchronized void addPackage(Launcher launcher, String packageName) {
+        if (mApplicationsLoader != null && mApplicationsLoader.isRunning()) {
+            startApplicationsLoaderLocked(launcher, false);
+            return;
+        }
+
+        if (packageName != null && packageName.length() > 0 && mApplicationsAdapter!=null) {
+            final PackageManager packageManager = launcher.getPackageManager();
+            final List<ResolveInfo> matches = findActivitiesForPackage(packageManager, packageName);
+
+            if (matches.size() > 0) {
+                final ApplicationsAdapter adapter = mApplicationsAdapter;
+                final HashMap<ComponentName, ApplicationInfo> cache = mAppInfoCache;
+
+                for (ResolveInfo info : matches) {
+                    adapter.setNotifyOnChange(false);
+                    adapter.add(makeAndCacheApplicationInfo(packageManager, cache, info, launcher));
+                }
+				adapter.updateDataSet();
+
+                //adapter.sort(new ApplicationInfoComparator());
+                //adapter.notifyDataSetChanged();
+            }
+        }
+    }
+
+    synchronized void removePackage(Launcher launcher, String packageName) {
+    	// for add/remove Package, we need use applications adapter's "full" list.
+
+        if (mApplicationsLoader != null && mApplicationsLoader.isRunning()) {
+            dropApplicationCache(); // TODO: this could be optimized
+            startApplicationsLoaderLocked(launcher, false);
+            return;
+        }
+
+        if (packageName != null && packageName.length() > 0 && mApplicationsAdapter!=null) {
+            final ApplicationsAdapter adapter = mApplicationsAdapter;
+
+            final List<ApplicationInfo> toRemove = new ArrayList<ApplicationInfo>();
+            final ArrayList<ApplicationInfo> allItems = adapter.allItems;
+            final int count = allItems.size();
+
+            for (int i = 0; i < count; i++) {
+                final ApplicationInfo applicationInfo = allItems.get(i);
+                final Intent intent = applicationInfo.intent;
+                final ComponentName component = intent.getComponent();
+                if (packageName.equals(component.getPackageName())) {
+                    toRemove.add(applicationInfo);
+                }
+            }
+
+            final HashMap<ComponentName, ApplicationInfo> cache = mAppInfoCache;
+            for (ApplicationInfo info : toRemove) {
+                adapter.setNotifyOnChange(false);
+                adapter.remove(info);
+                cache.remove(info.intent.getComponent());
+            }
+
+            if (toRemove.size() > 0) {
+				adapter.updateDataSet();
+                //adapter.sort(new ApplicationInfoComparator());
+                //adapter.notifyDataSetChanged();
+            }
+        }
+    }
+
+    synchronized void updatePackage(Launcher launcher, String packageName) {
+        if (mApplicationsLoader != null && mApplicationsLoader.isRunning()) {
+            startApplicationsLoaderLocked(launcher, false);
+            return;
+        }
+
+        if (packageName != null && packageName.length() > 0 && mApplicationsAdapter!=null) {
+            final PackageManager packageManager = launcher.getPackageManager();
+            final ApplicationsAdapter adapter = mApplicationsAdapter;
+
+            final List<ResolveInfo> matches = findActivitiesForPackage(packageManager, packageName);
+            final int count = matches.size();
+
+            boolean changed = false;
+
+            for (int i = 0; i < count; i++) {
+                final ResolveInfo info = matches.get(i);
+                final ApplicationInfo applicationInfo = findIntent(adapter,
+                        info.activityInfo.applicationInfo.packageName, info.activityInfo.name);
+                if (applicationInfo != null) {
+                    updateAndCacheApplicationInfo(packageManager, info, applicationInfo, launcher);
+                    changed = true;
+                }
+            }
+
+            if (syncLocked(launcher, packageName)) changed = true;
+
+            if (changed) {
+				adapter.updateDataSet();
+                //adapter.sort(new ApplicationInfoComparator());
+                //adapter.notifyDataSetChanged();
+            }
+        }
+    }
+
+    private void updateAndCacheApplicationInfo(PackageManager packageManager, ResolveInfo info,
+            ApplicationInfo applicationInfo, Context context) {
+
+        updateApplicationInfoTitleAndIcon(packageManager, info, applicationInfo, context);
+
+        ComponentName componentName = new ComponentName(
+                info.activityInfo.applicationInfo.packageName, info.activityInfo.name);
+        mAppInfoCache.put(componentName, applicationInfo);
+    }
+
+    synchronized void syncPackage(Launcher launcher, String packageName) {
+        if (mApplicationsLoader != null && mApplicationsLoader.isRunning()) {
+            startApplicationsLoaderLocked(launcher, false);
+            return;
+        }
+
+        if (packageName != null && packageName.length() > 0 && mApplicationsAdapter!=null) {
+            if (syncLocked(launcher, packageName)) {
+                final ApplicationsAdapter adapter = mApplicationsAdapter;
+				adapter.updateDataSet();
+                //adapter.sort(new ApplicationInfoComparator());
+                //adapter.notifyDataSetChanged();
+            }
+        }
+    }
+
+    private boolean syncLocked(Launcher launcher, String packageName) {
+        final PackageManager packageManager = launcher.getPackageManager();
+        final List<ResolveInfo> matches = findActivitiesForPackage(packageManager, packageName);
+
+        if (matches.size() > 0 && mApplicationsAdapter!=null) {
+            final ApplicationsAdapter adapter = mApplicationsAdapter;
+
+            // Find disabled activities and remove them from the adapter
+            boolean removed = removeDisabledActivities(packageName, matches, adapter);
+            // Find enable activities and add them to the adapter
+            // Also updates existing activities with new labels/icons
+            boolean added = addEnabledAndUpdateActivities(matches, adapter, launcher);
+
+            return added || removed;
+        }
+
+        return false;
+    }
+
+    private static List<ResolveInfo> findActivitiesForPackage(PackageManager packageManager,
+            String packageName) {
+
+        final Intent mainIntent = new Intent(Intent.ACTION_MAIN, null);
+        mainIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+
+        final List<ResolveInfo> apps = packageManager.queryIntentActivities(mainIntent, 0);
+        final List<ResolveInfo> matches = new ArrayList<ResolveInfo>();
+
+        if (apps != null) {
+            // Find all activities that match the packageName
+            int count = apps.size();
+            for (int i = 0; i < count; i++) {
+                final ResolveInfo info = apps.get(i);
+                final ActivityInfo activityInfo = info.activityInfo;
+                if (packageName.equals(activityInfo.packageName)) {
+                    matches.add(info);
+                }
+            }
+        }
+
+        return matches;
+    }
+
+    private boolean addEnabledAndUpdateActivities(List<ResolveInfo> matches,
+            ApplicationsAdapter adapter, Launcher launcher) {
+
+        final List<ApplicationInfo> toAdd = new ArrayList<ApplicationInfo>();
+        final int count = matches.size();
+
+        boolean changed = false;
+
+        for (int i = 0; i < count; i++) {
+            final ResolveInfo info = matches.get(i);
+            final ApplicationInfo applicationInfo = findIntent(adapter,
+                    info.activityInfo.applicationInfo.packageName, info.activityInfo.name);
+            if (applicationInfo == null) {
+                toAdd.add(makeAndCacheApplicationInfo(launcher.getPackageManager(),
+                        mAppInfoCache, info, launcher));
+                changed = true;
+            } else {
+                updateAndCacheApplicationInfo(
+                        launcher.getPackageManager(), info, applicationInfo, launcher);
+                changed = true;
+            }
+        }
+
+        for (ApplicationInfo info : toAdd) {
+            adapter.setNotifyOnChange(false);
+            adapter.add(info);
+        }
+
+        return changed;
+    }
+
+    private boolean removeDisabledActivities(String packageName, List<ResolveInfo> matches,
+            ApplicationsAdapter adapter) {
+
+        final List<ApplicationInfo> toRemove = new ArrayList<ApplicationInfo>();
+        final int count = adapter.getCount();
+
+        boolean changed = false;
+
+        for (int i = 0; i < count; i++) {
+            final ApplicationInfo applicationInfo = adapter.getItem(i);
+            final Intent intent = applicationInfo.intent;
+            final ComponentName component = intent.getComponent();
+            if (packageName.equals(component.getPackageName())) {
+                if (!findIntent(matches, component)) {
+                    toRemove.add(applicationInfo);
+                    changed = true;
+                }
+            }
+        }
+
+        final HashMap<ComponentName, ApplicationInfo> cache = mAppInfoCache;
+        for (ApplicationInfo info : toRemove) {
+            adapter.setNotifyOnChange(false);
+            adapter.remove(info);
+            cache.remove(info.intent.getComponent());
+        }
+
+        return changed;
+    }
+
+    private static ApplicationInfo findIntent(ApplicationsAdapter adapter, String packageName,
+            String name) {
+
+        final int count = adapter.getCount();
+        for (int i = 0; i < count; i++) {
+            final ApplicationInfo applicationInfo = adapter.getItem(i);
+            final Intent intent = applicationInfo.intent;
+            final ComponentName component = intent.getComponent();
+            if (packageName.equals(component.getPackageName()) &&
+                    name.equals(component.getClassName())) {
+                return applicationInfo;
+            }
+        }
+
+        return null;
+    }
+
+    private static boolean findIntent(List<ResolveInfo> apps, ComponentName component) {
+        final String className = component.getClassName();
+        for (ResolveInfo info : apps) {
+            final ActivityInfo activityInfo = info.activityInfo;
+            if (activityInfo.name.equals(className)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    Drawable getApplicationInfoIcon(PackageManager manager, ApplicationInfo info) {
+        final ResolveInfo resolveInfo = manager.resolveActivity(info.intent, 0);
+        if (resolveInfo == null) {
+            return null;
+        }
+
+        ComponentName componentName = new ComponentName(
+                resolveInfo.activityInfo.applicationInfo.packageName,
+                resolveInfo.activityInfo.name);
+        ApplicationInfo application = mAppInfoCache.get(componentName);
+
+        if (application == null) {
+            return resolveInfo.activityInfo.loadIcon(manager);
+        }
+
+        return application.icon;
+    }
+
+    private static ApplicationInfo makeAndCacheApplicationInfo(PackageManager manager,
+            HashMap<ComponentName, ApplicationInfo> appInfoCache, ResolveInfo info,
+            Context context) {
+
+        ComponentName componentName = new ComponentName(
+                info.activityInfo.applicationInfo.packageName,
+                info.activityInfo.name);
+        ApplicationInfo application = appInfoCache.get(componentName);
+
+        if (application == null) {
+            application = new ApplicationInfo();
+            application.container = ItemInfo.NO_ID;
+
+            updateApplicationInfoTitleAndIcon(manager, info, application, context);
+
+            application.setActivity(componentName,
+                    Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+
+            appInfoCache.put(componentName, application);
+        }
+
+        return application;
+    }
+
+    private static void updateApplicationInfoTitleAndIcon(PackageManager manager, ResolveInfo info,
+            ApplicationInfo application, Context context) {
+
+        application.title = info.loadLabel(manager);
+        if (application.title == null) {
+            application.title = info.activityInfo.name;
+        }
+
+        application.icon = getIcon(manager, context, info.activityInfo);
+
+        application.filtered = false;
+    }
+
+    private static final AtomicInteger sAppsLoaderCount = new AtomicInteger(1);
+    private static final AtomicInteger sWorkspaceLoaderCount = new AtomicInteger(1);
+
+    private class ApplicationsLoader implements Runnable {
+        private final WeakReference<Launcher> mLauncher;
+
+        private volatile boolean mStopped;
+        private volatile boolean mRunning;
+        private final boolean mIsLaunching;
+        private final int mId;
+
+        ApplicationsLoader(Launcher launcher, boolean isLaunching) {
+            mIsLaunching = isLaunching;
+            mLauncher = new WeakReference<Launcher>(launcher);
+            mRunning = true;
+            mId = sAppsLoaderCount.getAndIncrement();
+        }
+
+        void stop() {
+            mStopped = true;
+        }
+
+        boolean isRunning() {
+            return mRunning;
+        }
+
+        public void run() {
+            if (DEBUG_LOADERS) d(LOG_TAG, "  ----> running applications loader (" + mId + ")");
+
+            // Elevate priority when Home launches for the first time to avoid
+            // starving at boot time. Staring at a blank home is not cool.
+            android.os.Process.setThreadPriority(mIsLaunching ? Process.THREAD_PRIORITY_DEFAULT :
+                    Process.THREAD_PRIORITY_BACKGROUND);
+
+            final Intent mainIntent = new Intent(Intent.ACTION_MAIN, null);
+            mainIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+
+            final Launcher launcher = mLauncher.get();
+            final PackageManager manager = launcher.getPackageManager();
+            final List<ResolveInfo> apps = manager.queryIntentActivities(mainIntent, 0);
+
+            if (apps != null && !mStopped) {
+                final int count = apps.size();
+                // Can be set to null on the UI thread by the unbind() method
+                // Do not access without checking for null first
+                final ApplicationsAdapter applicationList = mApplicationsAdapter;
+
+                ChangeNotifier action = new ChangeNotifier(applicationList, true);
+                final HashMap<ComponentName, ApplicationInfo> appInfoCache = mAppInfoCache;
+
+                for (int i = 0; i < count && !mStopped; i++) {
+                    ResolveInfo info = apps.get(i);
+                    ApplicationInfo application =
+                        makeAndCacheApplicationInfo(manager, appInfoCache, info, launcher);
+
+                    if (action.add(application) && !mStopped) {
+                        launcher.runOnUiThread(action);
+                        action = new ChangeNotifier(applicationList, false);
+                    }
+                }
+
+                launcher.runOnUiThread(action);
+            }
+
+            /* If we've made it this far and mStopped isn't set, we've successfully loaded
+             * applications.  Otherwise, applications aren't loaded. */
+            mApplicationsLoaded = !mStopped;
+
+            if (mStopped) {
+                if (DEBUG_LOADERS) d(LOG_TAG, "  ----> applications loader stopped (" + mId + ")");
+            }
+            mRunning = false;
+        }
+    }
+
+    private static class ChangeNotifier implements Runnable {
+        private final ApplicationsAdapter mApplicationList;
+        private final ArrayList<ApplicationInfo> mBuffer;
+
+        private boolean mFirst = true;
+
+        ChangeNotifier(ApplicationsAdapter applicationList, boolean first) {
+            mApplicationList = applicationList;
+            mFirst = first;
+            mBuffer = new ArrayList<ApplicationInfo>(UI_NOTIFICATION_RATE);
+        }
+
+        public void run() {
+            final ApplicationsAdapter applicationList = mApplicationList;
+            // Can be set to null on the UI thread by the unbind() method
+            if (applicationList == null) return;
+
+            if (mFirst) {
+                applicationList.setNotifyOnChange(false);
+                applicationList.clear();
+                if (DEBUG_LOADERS) d(LOG_TAG, "  ----> cleared application list");
+                mFirst = false;
+            }
+
+            final ArrayList<ApplicationInfo> buffer = mBuffer;
+            final int count = buffer.size();
+
+            for (int i = 0; i < count; i++) {
+                applicationList.setNotifyOnChange(false);
+                applicationList.add(buffer.get(i));
+            }
+
+            buffer.clear();
+
+			applicationList.updateDataSet();
+            //applicationList.sort(new ApplicationInfoComparator());
+            //applicationList.notifyDataSetChanged();
+        }
+
+        boolean add(ApplicationInfo application) {
+            final ArrayList<ApplicationInfo> buffer = mBuffer;
+            buffer.add(application);
+            return buffer.size() >= UI_NOTIFICATION_RATE;
+        }
+    }
+
+    static class ApplicationInfoComparator implements Comparator<ApplicationInfo> {
+        public final int compare(ApplicationInfo a, ApplicationInfo b) {
+            return sCollator.compare(a.title.toString(), b.title.toString());
+        }
+    }
+
+    boolean isDesktopLoaded() {
+        return mDesktopItems != null && mDesktopAppWidgets != null && mDesktopItemsLoaded;
+    }
+
+    /**
+     * Loads all of the items on the desktop, in folders, or in the dock.
+     * These can be apps, shortcuts or widgets
+     */
+    void loadUserItems(boolean isLaunching, Launcher launcher, boolean localeChanged,
+            boolean loadApplications) {
+        if (DEBUG_LOADERS) d(LOG_TAG, "loading user items in " + Thread.currentThread().toString());
+        //ADW: load columns/rows settings
+        mDesktopRows=AlmostNexusSettingsHelper.getDesktopRows(launcher);
+        mDesktopColumns=AlmostNexusSettingsHelper.getDesktopColumns(launcher);
+        if (isLaunching && isDesktopLoaded()) {
+            if (DEBUG_LOADERS) d(LOG_TAG, "  --> items loaded, return");
+            if (loadApplications) startApplicationsLoader(launcher, true);
+            //if (SystemProperties.get("debug.launcher.ignore-cache", "") == "") {
+                // We have already loaded our data from the DB
+                if (DEBUG_LOADERS) d(LOG_TAG, "  --> loading from cache: " + mDesktopItems.size() + ", " + mDesktopAppWidgets.size());
+                launcher.onDesktopItemsLoaded(mDesktopItems, mDesktopAppWidgets);
+                return;
+            //}
+            //else
+            //{
+                //d(LOG_TAG, "  ----> debug: forcing reload of workspace");
+            //}
+        }
+
+        if (mDesktopItemsLoader != null && mDesktopItemsLoader.isRunning()) {
+            if (DEBUG_LOADERS) d(LOG_TAG, "  --> stopping workspace loader");
+            mDesktopItemsLoader.stop();
+            // Wait for the currently running thread to finish, this can take a little
+            // time but it should be well below the timeout limit
+            try {
+                mDesktopLoaderThread.join();
+            } catch (InterruptedException e) {
+                e(LOG_TAG, "mDesktopLoaderThread didn't exit in time");
+            }
+
+            // If the thread we are interrupting was tasked to load the list of
+            // applications make sure we keep that information in the new loader
+            // spawned below
+            // note: we don't apply this to localeChanged because the thread can
+            // only be stopped *after* the localeChanged handling has occured
+            loadApplications = mDesktopItemsLoader.mLoadApplications;
+        }
+
+        if (DEBUG_LOADERS) d(LOG_TAG, "  --> starting workspace loader");
+        mDesktopItemsLoaded = false;
+        mDesktopItemsLoader = new DesktopItemsLoader(launcher, localeChanged, loadApplications,
+                isLaunching);
+        mDesktopLoaderThread = new Thread(mDesktopItemsLoader, "Desktop Items Loader");
+        mDesktopLoaderThread.start();
+    }
+
+    private static String getLabel(PackageManager manager, ActivityInfo activityInfo) {
+        String label = activityInfo.loadLabel(manager).toString();
+        if (label == null) {
+            label = manager.getApplicationLabel(activityInfo.applicationInfo).toString();
+            if (label == null) {
+                label = activityInfo.name;
+            }
+        }
+        return label;
+    }
+
+    private class DesktopItemsLoader implements Runnable {
+        private volatile boolean mStopped;
+        private volatile boolean mFinished;
+
+        private final WeakReference<Launcher> mLauncher;
+        private final boolean mLocaleChanged;
+        private final boolean mLoadApplications;
+        private final boolean mIsLaunching;
+        private final int mId;
+
+        DesktopItemsLoader(Launcher launcher, boolean localeChanged, boolean loadApplications,
+                boolean isLaunching) {
+            mLoadApplications = loadApplications;
+            mIsLaunching = isLaunching;
+            mLauncher = new WeakReference<Launcher>(launcher);
+            mLocaleChanged = localeChanged;
+            mId = sWorkspaceLoaderCount.getAndIncrement();
+            mFinished = false;
+        }
+
+        void stop() {
+            d(LOG_TAG, "  ----> workspace loader " + mId + " stopped from " + Thread.currentThread().toString());
+            mStopped = true;
+        }
+
+        boolean isRunning() {
+            return !mFinished;
+        }
+
+        public void run() {
+            assert(!mFinished); // can only run once
+            load_workspace();
+            mFinished = true;
+        }
+
+        private void load_workspace() {
+            if (DEBUG_LOADERS) d(LOG_TAG, "  ----> running workspace loader (" + mId + ")");
+
+            android.os.Process.setThreadPriority(Process.THREAD_PRIORITY_DEFAULT);
+
+            final Launcher launcher = mLauncher.get();
+            final ContentResolver contentResolver = launcher.getContentResolver();
+            final PackageManager manager = launcher.getPackageManager();
+
+            if (mLocaleChanged) {
+                updateShortcutLabels(contentResolver, manager);
+            }
+
+            final ArrayList<ItemInfo> desktopItems = new ArrayList<ItemInfo>();
+            final ArrayList<LauncherAppWidgetInfo> desktopAppWidgets = new ArrayList<LauncherAppWidgetInfo>();
+            final HashMap<Long, FolderInfo> folders = new HashMap<Long, FolderInfo>();
+
+            final Cursor c = contentResolver.query(
+                    LauncherSettings.Favorites.CONTENT_URI, null, null, null, null);
+
+            try {
+                final int idIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites._ID);
+                final int intentIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.INTENT);
+                final int titleIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.TITLE);
+                final int iconTypeIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.ICON_TYPE);
+                final int iconIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.ICON);
+                final int iconPackageIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.ICON_PACKAGE);
+                final int iconResourceIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.ICON_RESOURCE);
+                final int containerIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.CONTAINER);
+                final int itemTypeIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.ITEM_TYPE);
+                final int appWidgetIdIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.APPWIDGET_ID);
+                final int screenIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.SCREEN);
+                final int cellXIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.CELLX);
+                final int cellYIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.CELLY);
+                final int spanXIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.SPANX);
+                final int spanYIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.SPANY);
+                final int uriIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.URI);
+                final int displayModeIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.DISPLAY_MODE);
+
+                ApplicationInfo info;
+                String intentDescription;
+                Widget widgetInfo;
+                LauncherAppWidgetInfo appWidgetInfo;
+                int container;
+                long id;
+                Intent intent;
+
+                while (!mStopped && c.moveToNext()) {
+                    try {
+                        int itemType = c.getInt(itemTypeIndex);
+                        switch (itemType) {
+                        case LauncherSettings.Favorites.ITEM_TYPE_APPLICATION:
+                        case LauncherSettings.Favorites.ITEM_TYPE_SHORTCUT:
+                            intentDescription = c.getString(intentIndex);
+                            try {
+                                intent = Intent.parseUri(intentDescription, 0);
+                            } catch (java.net.URISyntaxException e) {
+                                continue;
+                            }
+
+                            if (itemType == LauncherSettings.Favorites.ITEM_TYPE_APPLICATION) {
+                                info = getApplicationInfo(manager, intent, launcher);
+                            } else {
+                                info = getApplicationInfoShortcut(c, launcher, iconTypeIndex,
+                                        iconPackageIndex, iconResourceIndex, iconIndex);
+                            }
+
+                            if (info == null) {
+                                info = new ApplicationInfo();
+                                info.icon = manager.getDefaultActivityIcon();
+                            }
+
+                            if (info != null) {
+                                info.title = c.getString(titleIndex);
+                                info.intent = intent;
+
+                                info.id = c.getLong(idIndex);
+                                container = c.getInt(containerIndex);
+                                info.container = container;
+                                info.screen = c.getInt(screenIndex);
+                                info.cellX = c.getInt(cellXIndex);
+                                info.cellY = c.getInt(cellYIndex);
+
+                                switch (container) {
+                                case LauncherSettings.Favorites.CONTAINER_DESKTOP:
+                                case LauncherSettings.Favorites.CONTAINER_DOCKBAR:
+                                case LauncherSettings.Favorites.CONTAINER_LAB:
+                                case LauncherSettings.Favorites.CONTAINER_RAB:
+                                case LauncherSettings.Favorites.CONTAINER_LAB2:
+                                case LauncherSettings.Favorites.CONTAINER_RAB2:
+                                    desktopItems.add(info);
+                                    break;
+                                default:
+                                    // Item is in a user folder
+                                    UserFolderInfo folderInfo =
+                                            findOrMakeUserFolder(folders, container);
+                                    folderInfo.add(info);
+                                    break;
+                                }
+                            }
+                            break;
+                        case LauncherSettings.Favorites.ITEM_TYPE_USER_FOLDER:
+
+                            id = c.getLong(idIndex);
+                            UserFolderInfo folderInfo = findOrMakeUserFolder(folders, id);
+
+                            folderInfo.title = c.getString(titleIndex);
+
+                            folderInfo.id = id;
+                            container = c.getInt(containerIndex);
+                            folderInfo.container = container;
+                            folderInfo.screen = c.getInt(screenIndex);
+                            folderInfo.cellX = c.getInt(cellXIndex);
+                            folderInfo.cellY = c.getInt(cellYIndex);
+
+                            switch (container) {
+                                case LauncherSettings.Favorites.CONTAINER_DESKTOP:
+                                case LauncherSettings.Favorites.CONTAINER_DOCKBAR:
+                                case LauncherSettings.Favorites.CONTAINER_LAB:
+                                case LauncherSettings.Favorites.CONTAINER_RAB:
+                                case LauncherSettings.Favorites.CONTAINER_LAB2:
+                                case LauncherSettings.Favorites.CONTAINER_RAB2:
+                                    desktopItems.add(folderInfo);
+                                    break;
+                            }
+                            break;
+                        case LauncherSettings.Favorites.ITEM_TYPE_LIVE_FOLDER:
+
+                            id = c.getLong(idIndex);
+                            LiveFolderInfo liveFolderInfo = findOrMakeLiveFolder(folders, id);
+
+                            intentDescription = c.getString(intentIndex);
+                            intent = null;
+                            if (intentDescription != null) {
+                                try {
+                                    intent = Intent.parseUri(intentDescription, 0);
+                                } catch (java.net.URISyntaxException e) {
+                                    // Ignore, a live folder might not have a base intent
+                                }
+                            }
+
+                            liveFolderInfo.title = c.getString(titleIndex);
+                            liveFolderInfo.id = id;
+                            container = c.getInt(containerIndex);
+                            liveFolderInfo.container = container;
+                            liveFolderInfo.screen = c.getInt(screenIndex);
+                            liveFolderInfo.cellX = c.getInt(cellXIndex);
+                            liveFolderInfo.cellY = c.getInt(cellYIndex);
+                            liveFolderInfo.uri = Uri.parse(c.getString(uriIndex));
+                            liveFolderInfo.baseIntent = intent;
+                            liveFolderInfo.displayMode = c.getInt(displayModeIndex);
+
+                            loadLiveFolderIcon(launcher, c, iconTypeIndex, iconPackageIndex,
+                                    iconResourceIndex, liveFolderInfo);
+
+                            switch (container) {
+                                case LauncherSettings.Favorites.CONTAINER_DESKTOP:
+                                case LauncherSettings.Favorites.CONTAINER_DOCKBAR:
+                                case LauncherSettings.Favorites.CONTAINER_LAB:
+                                case LauncherSettings.Favorites.CONTAINER_RAB:
+                                case LauncherSettings.Favorites.CONTAINER_LAB2:
+                                case LauncherSettings.Favorites.CONTAINER_RAB2:
+                                    desktopItems.add(liveFolderInfo);
+                                    break;
+                            }
+                            break;
+                        case LauncherSettings.Favorites.ITEM_TYPE_WIDGET_SEARCH:
+                            widgetInfo = Widget.makeSearch();
+
+                            container = c.getInt(containerIndex);
+                            if (container != LauncherSettings.Favorites.CONTAINER_DESKTOP) {
+                                e(Launcher.LOG_TAG, "Widget found where container "
+                                        + "!= CONTAINER_DESKTOP  ignoring!");
+                                continue;
+                            }
+
+                            widgetInfo.id = c.getLong(idIndex);
+                            widgetInfo.screen = c.getInt(screenIndex);
+                            widgetInfo.container = container;
+                            widgetInfo.cellX = c.getInt(cellXIndex);
+                            widgetInfo.cellY = c.getInt(cellYIndex);
+                            widgetInfo.spanX = c.getInt(spanXIndex);
+                            widgetInfo.spanY = c.getInt(spanYIndex);
+
+                            desktopItems.add(widgetInfo);
+                            break;
+                        case LauncherSettings.Favorites.ITEM_TYPE_APPWIDGET:
+                            // Read all Launcher-specific widget details
+                            int appWidgetId = c.getInt(appWidgetIdIndex);
+                            appWidgetInfo = new LauncherAppWidgetInfo(appWidgetId);
+                            appWidgetInfo.id = c.getLong(idIndex);
+                            appWidgetInfo.screen = c.getInt(screenIndex);
+                            appWidgetInfo.cellX = c.getInt(cellXIndex);
+                            appWidgetInfo.cellY = c.getInt(cellYIndex);
+                            appWidgetInfo.spanX = c.getInt(spanXIndex);
+                            appWidgetInfo.spanY = c.getInt(spanYIndex);
+
+                            container = c.getInt(containerIndex);
+                            if (container != LauncherSettings.Favorites.CONTAINER_DESKTOP) {
+                                e(Launcher.LOG_TAG, "Widget found where container "
+                                        + "!= CONTAINER_DESKTOP -- ignoring!");
+                                continue;
+                            }
+                            appWidgetInfo.container = c.getInt(containerIndex);
+
+                            desktopAppWidgets.add(appWidgetInfo);
+                            break;
+                        }
+                    } catch (Exception e) {
+                        w(Launcher.LOG_TAG, "Desktop items loading interrupted:", e);
+                    }
+                }
+            } finally {
+                c.close();
+            }
+            if (DEBUG_LOADERS) {
+                d(LOG_TAG, "  ----> workspace loader " + mId + " finished loading data");
+                d(LOG_TAG, "  ----> worskpace items=" + desktopItems.size());
+                d(LOG_TAG, "  ----> worskpace widgets=" + desktopAppWidgets.size());
+            }
+
+            synchronized(LauncherModel.this) {
+                if (!mStopped) {
+                    if (DEBUG_LOADERS)  {
+                        d(LOG_TAG, "  --> done loading workspace; not stopped");
+                    }
+
+                    // Create a copy of the lists in case the workspace loader is restarted
+                    // and the list are cleared before the UI can go through them
+                    final ArrayList<ItemInfo> uiDesktopItems =
+                            new ArrayList<ItemInfo>(desktopItems);
+                    final ArrayList<LauncherAppWidgetInfo> uiDesktopWidgets =
+                            new ArrayList<LauncherAppWidgetInfo>(desktopAppWidgets);
+
+                    if (!mStopped) {
+                        d(LOG_TAG, "  ----> items cloned, ready to refresh UI");
+                        launcher.runOnUiThread(new Runnable() {
+                            public void run() {
+                                if (DEBUG_LOADERS) d(LOG_TAG, "  ----> onDesktopItemsLoaded()");
+                                launcher.onDesktopItemsLoaded(uiDesktopItems, uiDesktopWidgets);
+                            }
+                        });
+                    }
+
+                    if (mLoadApplications) {
+                        if (DEBUG_LOADERS) {
+                            d(LOG_TAG, "  ----> loading applications from workspace loader");
+                        }
+                        startApplicationsLoader(launcher, mIsLaunching);
+                    }
+
+                    mDesktopItems = desktopItems;
+                    mDesktopAppWidgets = desktopAppWidgets;
+                    mFolders = folders;
+                    mDesktopItemsLoaded = true;
+                } else {
+                    if (DEBUG_LOADERS) d(LOG_TAG, "  ----> worskpace loader was stopped");
+                }
+            }
+        }
+
+        private void updateShortcutLabels(ContentResolver resolver, PackageManager manager) {
+            final Cursor c = resolver.query(LauncherSettings.Favorites.CONTENT_URI,
+                    new String[] { LauncherSettings.Favorites._ID, LauncherSettings.Favorites.TITLE,
+                            LauncherSettings.Favorites.INTENT, LauncherSettings.Favorites.ITEM_TYPE },
+                    null, null, null);
+
+            final int idIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites._ID);
+            final int intentIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.INTENT);
+            final int itemTypeIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.ITEM_TYPE);
+            final int titleIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.TITLE);
+
+            // boolean changed = false;
+
+            try {
+                while (!mStopped && c.moveToNext()) {
+                    try {
+                        if (c.getInt(itemTypeIndex) !=
+                                LauncherSettings.Favorites.ITEM_TYPE_APPLICATION) {
+                            continue;
+                        }
+
+                        final String intentUri = c.getString(intentIndex);
+                        if (intentUri != null) {
+                            final Intent shortcut = Intent.parseUri(intentUri, 0);
+                            if (Intent.ACTION_MAIN.equals(shortcut.getAction())) {
+                                final ComponentName name = shortcut.getComponent();
+                                if (name != null) {
+                                    final ActivityInfo activityInfo = manager.getActivityInfo(name, 0);
+                                    final String title = c.getString(titleIndex);
+                                    String label = getLabel(manager, activityInfo);
+
+                                    if (title == null || !title.equals(label)) {
+                                        final ContentValues values = new ContentValues();
+                                        values.put(LauncherSettings.Favorites.TITLE, label);
+
+                                        resolver.update(
+                                                LauncherSettings.Favorites.CONTENT_URI_NO_NOTIFICATION,
+                                                values, "_id=?",
+                                                new String[] { String.valueOf(c.getLong(idIndex)) });
+
+                                        // changed = true;
+                                    }
+                                }
+                            }
+                        }
+                    } catch (URISyntaxException e) {
+                        // Ignore
+                    } catch (PackageManager.NameNotFoundException e) {
+                        // Ignore
+                    }
+                }
+            } finally {
+                c.close();
+            }
+
+            // if (changed) resolver.notifyChange(Settings.Favorites.CONTENT_URI, null);
+        }
+    }
+
+    private static void loadLiveFolderIcon(Launcher launcher, Cursor c, int iconTypeIndex,
+            int iconPackageIndex, int iconResourceIndex, LiveFolderInfo liveFolderInfo) {
+
+        int iconType = c.getInt(iconTypeIndex);
+        switch (iconType) {
+            case LauncherSettings.Favorites.ICON_TYPE_RESOURCE:
+                String packageName = c.getString(iconPackageIndex);
+                String resourceName = c.getString(iconResourceIndex);
+                PackageManager packageManager = launcher.getPackageManager();
+                try {
+                    Resources resources = packageManager.getResourcesForApplication(packageName);
+                    final int id = resources.getIdentifier(resourceName, null, null);
+                    liveFolderInfo.icon = resources.getDrawable(id);
+                } catch (Exception e) {
+                    liveFolderInfo.icon =
+                            launcher.getResources().getDrawable(R.drawable.ic_launcher_folder);
+                }
+                liveFolderInfo.iconResource = new Intent.ShortcutIconResource();
+                liveFolderInfo.iconResource.packageName = packageName;
+                liveFolderInfo.iconResource.resourceName = resourceName;
+                break;
+            default:
+                liveFolderInfo.icon =
+                        launcher.getResources().getDrawable(R.drawable.ic_launcher_folder);
+        }
+    }
+
+    /**
+     * Finds the user folder defined by the specified id.
+     *
+     * @param id The id of the folder to look for.
+     *
+     * @return A UserFolderInfo if the folder exists or null otherwise.
+     */
+    FolderInfo findFolderById(long id) {
+        return mFolders.get(id);
+    }
+
+    void addFolder(FolderInfo info) {
+        mFolders.put(info.id, info);
+    }
+
+    /**
+     * Return an existing UserFolderInfo object if we have encountered this ID previously, or make a
+     * new one.
+     */
+    private UserFolderInfo findOrMakeUserFolder(HashMap<Long, FolderInfo> folders, long id) {
+        // See if a placeholder was created for us already
+        FolderInfo folderInfo = folders.get(id);
+        if (folderInfo == null || !(folderInfo instanceof UserFolderInfo)) {
+            // No placeholder -- create a new instance
+            folderInfo = new UserFolderInfo();
+            folders.put(id, folderInfo);
+        }
+        return (UserFolderInfo) folderInfo;
+    }
+
+    /**
+     * Return an existing UserFolderInfo object if we have encountered this ID previously, or make a
+     * new one.
+     */
+    private LiveFolderInfo findOrMakeLiveFolder(HashMap<Long, FolderInfo> folders, long id) {
+        // See if a placeholder was created for us already
+        FolderInfo folderInfo = folders.get(id);
+        if (folderInfo == null || !(folderInfo instanceof LiveFolderInfo)) {
+            // No placeholder -- create a new instance
+            folderInfo = new LiveFolderInfo();
+            folders.put(id, folderInfo);
+        }
+        return (LiveFolderInfo) folderInfo;
+    }
+
+    /**
+     * Remove the callback for the cached drawables or we leak the previous
+     * Home screen on orientation change.
+     */
+    void unbind() {
+        // Interrupt the applications loader before setting the adapter to null
+        stopAndWaitForApplicationsLoader();
+        mApplicationsAdapter = null;
+        unbindAppDrawables(mApplications);
+        unbindDrawables(mDesktopItems);
+        unbindAppWidgetHostViews(mDesktopAppWidgets);
+        unbindCachedIconDrawables();
+    }
+
+    /**
+     * Remove the callback for the cached drawables or we leak the previous
+     * Home screen on orientation change.
+     */
+    private void unbindDrawables(ArrayList<ItemInfo> desktopItems) {
+        if (desktopItems != null) {
+            final int count = desktopItems.size();
+            for (int i = 0; i < count; i++) {
+                ItemInfo item = desktopItems.get(i);
+                switch (item.itemType) {
+                case LauncherSettings.Favorites.ITEM_TYPE_APPLICATION:
+                case LauncherSettings.Favorites.ITEM_TYPE_SHORTCUT:
+                    ((ApplicationInfo)item).icon.setCallback(null);
+                    break;
+                }
+            }
+        }
+    }
+
+    /**
+     * Remove the callback for the cached drawables or we leak the previous
+     * Home screen on orientation change.
+     */
+    private void unbindAppDrawables(ArrayList<ApplicationInfo> applications) {
+        if (applications != null) {
+            final int count = applications.size();
+            for (int i = 0; i < count; i++) {
+                applications.get(i).icon.setCallback(null);
+            }
+        }
+    }
+
+    /**
+     * Remove any {@link LauncherAppWidgetHostView} references in our widgets.
+     */
+    private void unbindAppWidgetHostViews(ArrayList<LauncherAppWidgetInfo> appWidgets) {
+        if (appWidgets != null) {
+            final int count = appWidgets.size();
+            for (int i = 0; i < count; i++) {
+                LauncherAppWidgetInfo launcherInfo = appWidgets.get(i);
+                launcherInfo.hostView = null;
+            }
+        }
+    }
+
+    /**
+     * Remove the callback for the cached drawables or we leak the previous
+     * Home screen on orientation change.
+     */
+    private void unbindCachedIconDrawables() {
+        for (ApplicationInfo appInfo : mAppInfoCache.values()) {
+            appInfo.icon.setCallback(null);
+        }
+    }
+
+    /**
+     * Fills in the occupied structure with all of the shortcuts, apps, folders and widgets in
+     * the model.
+     */
+    void findAllOccupiedCells(boolean[][] occupied, int countX, int countY, int screen) {
+        final ArrayList<ItemInfo> desktopItems = mDesktopItems;
+        if (desktopItems != null) {
+            final int count = desktopItems.size();
+            for (int i = 0; i < count; i++) {
+                //ADW: Don't load items outer current columns/rows limits
+                if((desktopItems.get(i).cellX+(desktopItems.get(i).spanX-1))<mDesktopColumns &&
+                		(desktopItems.get(i).cellY+(desktopItems.get(i).spanY-1))<mDesktopRows)
+                addOccupiedCells(occupied, screen, desktopItems.get(i));
+            }
+        }
+
+        final ArrayList<LauncherAppWidgetInfo> desktopAppWidgets = mDesktopAppWidgets;
+        if (desktopAppWidgets != null) {
+            final int count = desktopAppWidgets.size();
+            for (int i = 0; i < count; i++) {
+                addOccupiedCells(occupied, screen, desktopAppWidgets.get(i));
+            }
+        }
+    }
+
+    /**
+     * Add the footprint of the specified item to the occupied array
+     */
+    private void addOccupiedCells(boolean[][] occupied, int screen,
+            ItemInfo item) {
+        if (item.screen == screen) {
+            for (int xx = item.cellX; xx < item.cellX + item.spanX; xx++) {
+                for (int yy = item.cellY; yy < item.cellY + item.spanY; yy++) {
+                    if(xx<mDesktopColumns && yy<mDesktopRows)
+                    	occupied[xx][yy] = true;
+                }
+            }
+        }
+    }
+
+    /**
+     * @return The current list of applications
+     */
+    ApplicationsAdapter getApplicationsAdapter() {
+        return mApplicationsAdapter;
+    }
+
+    /**
+     * Add an item to the desktop
+     * @param info
+     */
+    void addDesktopItem(ItemInfo info) {
+        // TODO: write to DB; also check that folder has been added to folders list
+        mDesktopItems.add(info);
+    }
+
+    /**
+     * Remove an item from the desktop
+     * @param info
+     */
+    void removeDesktopItem(ItemInfo info) {
+        // TODO: write to DB; figure out if we should remove folder from folders list
+        mDesktopItems.remove(info);
+    }
+
+    /**
+     * Add a widget to the desktop
+     */
+    void addDesktopAppWidget(LauncherAppWidgetInfo info) {
+        mDesktopAppWidgets.add(info);
+    }
+
+    /**
+     * Remove a widget from the desktop
+     */
+    void removeDesktopAppWidget(LauncherAppWidgetInfo info) {
+        mDesktopAppWidgets.remove(info);
+    }
+
+    /**
+     * Make an ApplicationInfo object for an application
+     */
+    private static ApplicationInfo getApplicationInfo(PackageManager manager, Intent intent,
+                                                      Context context) {
+        final ResolveInfo resolveInfo = manager.resolveActivity(intent, 0);
+        if (resolveInfo == null) {
+            return null;
+        }
+        final ApplicationInfo info = new ApplicationInfo();
+        final ActivityInfo activityInfo = resolveInfo.activityInfo;
+        
+        info.icon = getIcon(manager, context, activityInfo);
+        
+        if (info.title == null || info.title.length() == 0) {
+            info.title = activityInfo.loadLabel(manager);
+        }
+        if (info.title == null) {
+            info.title = "";
+        }
+        info.itemType = LauncherSettings.Favorites.ITEM_TYPE_APPLICATION;
+        return info;
+    }
+
+    /**
+     * Make an ApplicationInfo object for a shortcut
+     */
+    private ApplicationInfo getApplicationInfoShortcut(Cursor c, Context context,
+            int iconTypeIndex, int iconPackageIndex, int iconResourceIndex, int iconIndex) {
+
+        final ApplicationInfo info = new ApplicationInfo();
+        info.itemType = LauncherSettings.Favorites.ITEM_TYPE_SHORTCUT;
+
+        int iconType = c.getInt(iconTypeIndex);
+        switch (iconType) {
+            case LauncherSettings.Favorites.ICON_TYPE_RESOURCE:
+                String packageName = c.getString(iconPackageIndex);
+                String resourceName = c.getString(iconResourceIndex);
+                PackageManager packageManager = context.getPackageManager();
+                try {
+                    Resources resources = packageManager.getResourcesForApplication(packageName);
+                    final int id = resources.getIdentifier(resourceName, null, null);
+                    info.icon = Utilities.createIconThumbnail(resources.getDrawable(id), context);
+                } catch (Exception e) {
+                    info.icon = packageManager.getDefaultActivityIcon();
+                }
+                info.iconResource = new Intent.ShortcutIconResource();
+                info.iconResource.packageName = packageName;
+                info.iconResource.resourceName = resourceName;
+                info.customIcon = false;
+                break;
+            case LauncherSettings.Favorites.ICON_TYPE_BITMAP:
+                byte[] data = c.getBlob(iconIndex);
+                try {
+                    Bitmap bitmap = BitmapFactory.decodeByteArray(data, 0, data.length);
+                    info.icon = new FastBitmapDrawable(
+                            Utilities.createBitmapThumbnail(bitmap, context));
+                } catch (Exception e) {
+                    packageManager = context.getPackageManager();
+                    info.icon = packageManager.getDefaultActivityIcon();
+                }
+                info.filtered = true;
+                info.customIcon = true;
+                break;
+            default:
+                info.icon = context.getPackageManager().getDefaultActivityIcon();
+                info.customIcon = false;
+                break;
+        }
+        return info;
+    }
+
+    /**
+     * Remove an item from the in-memory representation of a user folder. Does not change the DB.
+     */
+    void removeUserFolderItem(UserFolderInfo folder, ItemInfo info) {
+        //noinspection SuspiciousMethodCalls
+        folder.contents.remove(info);
+    }
+
+    /**
+     * Removes a UserFolder from the in-memory list of folders. Does not change the DB.
+     * @param userFolderInfo
+     */
+    void removeUserFolder(UserFolderInfo userFolderInfo) {
+        mFolders.remove(userFolderInfo.id);
     }
 
     /**
@@ -150,7 +1381,6 @@ public class LauncherModel extends BroadcastReceiver {
         item.cellX = cellX;
         item.cellY = cellY;
 
-        final Uri uri = LauncherSettings.Favorites.getContentUri(item.id, false);
         final ContentValues values = new ContentValues();
         final ContentResolver cr = context.getContentResolver();
 
@@ -159,11 +1389,7 @@ public class LauncherModel extends BroadcastReceiver {
         values.put(LauncherSettings.Favorites.CELLY, item.cellY);
         values.put(LauncherSettings.Favorites.SCREEN, item.screen);
 
-        sWorker.post(new Runnable() {
-                public void run() {
-                    cr.update(uri, values, null, null);
-                }
-            });
+        cr.update(LauncherSettings.Favorites.getContentUri(item.id, false), values, null, null);
     }
 
     /**
@@ -184,10 +1410,7 @@ public class LauncherModel extends BroadcastReceiver {
         return result;
     }
 
-    /**
-     * Find a folder in the db, creating the FolderInfo if necessary, and adding it to folderList.
-     */
-    FolderInfo getFolderById(Context context, HashMap<Long,FolderInfo> folderList, long id) {
+    FolderInfo getFolderById(Context context, long id) {
         final ContentResolver cr = context.getContentResolver();
         Cursor c = cr.query(LauncherSettings.Favorites.CONTENT_URI, null,
                 "_id=? and (itemType=? or itemType=?)",
@@ -207,10 +1430,10 @@ public class LauncherModel extends BroadcastReceiver {
                 FolderInfo folderInfo = null;
                 switch (c.getInt(itemTypeIndex)) {
                     case LauncherSettings.Favorites.ITEM_TYPE_USER_FOLDER:
-                        folderInfo = findOrMakeUserFolder(folderList, id);
+                        folderInfo = findOrMakeUserFolder(mFolders, id);
                         break;
                     case LauncherSettings.Favorites.ITEM_TYPE_LIVE_FOLDER:
-                        folderInfo = findOrMakeLiveFolder(folderList, id);
+                        folderInfo = findOrMakeLiveFolder(mFolders, id);
                         break;
                 }
 
@@ -273,13 +1496,10 @@ public class LauncherModel extends BroadcastReceiver {
      */
     static void deleteItemFromDatabase(Context context, ItemInfo item) {
         final ContentResolver cr = context.getContentResolver();
-        final Uri uriToDelete = LauncherSettings.Favorites.getContentUri(item.id, false);
-        sWorker.post(new Runnable() {
-                public void run() {
-                    cr.delete(uriToDelete, null, null);
-                }
-            });
+
+        cr.delete(LauncherSettings.Favorites.getContentUri(item.id, false), null, null);
     }
+
 
     /**
      * Remove the contents of the specified folder from the database
@@ -293,1310 +1513,138 @@ public class LauncherModel extends BroadcastReceiver {
     }
 
     /**
-     * Set this as the current Launcher activity object for the loader.
+     * Get an the icon for an activity
+     * Accounts for theme and icon shading
      */
-    public void initialize(Callbacks callbacks) {
-        synchronized (mLock) {
-            mCallbacks = new WeakReference<Callbacks>(callbacks);
-        }
-    }
-
-    /**
-     * Call from the handler for ACTION_PACKAGE_ADDED, ACTION_PACKAGE_REMOVED and
-     * ACTION_PACKAGE_CHANGED.
-     */
-    public void onReceive(Context context, Intent intent) {
-        if (DEBUG_LOADERS) Log.d(TAG, "onReceive intent=" + intent);
-        
-        final String action = intent.getAction();
-
-        if (Intent.ACTION_PACKAGE_CHANGED.equals(action)
-                || Intent.ACTION_PACKAGE_REMOVED.equals(action)
-                || Intent.ACTION_PACKAGE_ADDED.equals(action)) {
-            final String packageName = intent.getData().getSchemeSpecificPart();
-            final boolean replacing = intent.getBooleanExtra(Intent.EXTRA_REPLACING, false);
-
-            int op = PackageUpdatedTask.OP_NONE;
-
-            if (packageName == null || packageName.length() == 0) {
-                // they sent us a bad intent
-                return;
-            }
-
-            if (Intent.ACTION_PACKAGE_CHANGED.equals(action)) {
-                op = PackageUpdatedTask.OP_UPDATE;
-            } else if (Intent.ACTION_PACKAGE_REMOVED.equals(action)) {
-                if (!replacing) {
-                    op = PackageUpdatedTask.OP_REMOVE;
-                }
-                // else, we are replacing the package, so a PACKAGE_ADDED will be sent
-                // later, we will update the package at this time
-            } else if (Intent.ACTION_PACKAGE_ADDED.equals(action)) {
-                if (!replacing) {
-                    op = PackageUpdatedTask.OP_ADD;
-                } else {
-                    op = PackageUpdatedTask.OP_UPDATE;
-                }
-            }
-
-            if (op != PackageUpdatedTask.OP_NONE) {
-                enqueuePackageUpdated(new PackageUpdatedTask(op, new String[] { packageName }));
-            }
-
-        } else if (Intent.ACTION_EXTERNAL_APPLICATIONS_AVAILABLE.equals(action)) {
-            // First, schedule to add these apps back in.
-            String[] packages = intent.getStringArrayExtra(Intent.EXTRA_CHANGED_PACKAGE_LIST);
-            enqueuePackageUpdated(new PackageUpdatedTask(PackageUpdatedTask.OP_ADD, packages));
-            // Then, rebind everything.
-            boolean runLoader = true;
-            if (mCallbacks != null) {
-                Callbacks callbacks = mCallbacks.get();
-                if (callbacks != null) {
-                    // If they're paused, we can skip loading, because they'll do it again anyway
-                    if (callbacks.setLoadOnResume()) {
-                        runLoader = false;
-                    }
-                }
-            }
-            if (runLoader) {
-                startLoader(mApp, false);
-            }
-
-        } else if (Intent.ACTION_EXTERNAL_APPLICATIONS_UNAVAILABLE.equals(action)) {
-            String[] packages = intent.getStringArrayExtra(Intent.EXTRA_CHANGED_PACKAGE_LIST);
-            enqueuePackageUpdated(new PackageUpdatedTask(
-                        PackageUpdatedTask.OP_UNAVAILABLE, packages));
-
-        }
-    }
-
-    public void startLoader(Context context, boolean isLaunching) {
-        synchronized (mLock) {
-            if (DEBUG_LOADERS) {
-                Log.d(TAG, "startLoader isLaunching=" + isLaunching);
-            }
-
-            // Don't bother to start the thread if we know it's not going to do anything
-            if (mCallbacks != null && mCallbacks.get() != null) {
-                // If there is already one running, tell it to stop.
-                LoaderTask oldTask = mLoaderTask;
-                if (oldTask != null) {
-                    if (oldTask.isLaunching()) {
-                        // don't downgrade isLaunching if we're already running
-                        isLaunching = true;
-                    }
-                    oldTask.stopLocked();
-                }
-                mLoaderTask = new LoaderTask(context, isLaunching);
-                sWorker.post(mLoaderTask);
-            }
-        }
-    }
-
-    public void stopLoader() {
-        synchronized (mLock) {
-            if (mLoaderTask != null) {
-                mLoaderTask.stopLocked();
-            }
-        }
-    }
-
-    /**
-     * Runnable for the thread that loads the contents of the launcher:
-     *   - workspace icons
-     *   - widgets
-     *   - all apps icons
-     */
-    private class LoaderTask implements Runnable {
-        private Context mContext;
-        private Thread mWaitThread;
-        private boolean mIsLaunching;
-        private boolean mStopped;
-        private boolean mLoadAndBindStepFinished;
-
-        LoaderTask(Context context, boolean isLaunching) {
-            mContext = context;
-            mIsLaunching = isLaunching;
-        }
-
-        boolean isLaunching() {
-            return mIsLaunching;
-        }
-
-        private void loadAndBindWorkspace() {
-            // Load the workspace
-
-            // For now, just always reload the workspace.  It's ~100 ms vs. the
-            // binding which takes many hundreds of ms.
-            // We can reconsider.
-            if (DEBUG_LOADERS) {
-                Log.d(TAG, "loadAndBindWorkspace mWorkspaceLoaded=" + mWorkspaceLoaded);
-            }
-            if (true || !mWorkspaceLoaded) {
-                loadWorkspace();
-                if (mStopped) {
-                    return;
-                }
-                mWorkspaceLoaded = true;
-            }
-
-            // Bind the workspace
-            bindWorkspace();
-        }
-
-        private void waitForIdle() {
-            // Wait until the either we're stopped or the other threads are done.
-            // This way we don't start loading all apps until the workspace has settled
-            // down.
-            synchronized (LoaderTask.this) {
-                final long workspaceWaitTime = DEBUG_LOADERS ? SystemClock.uptimeMillis() : 0;
-
-                mHandler.postIdle(new Runnable() {
-                        public void run() {
-                            synchronized (LoaderTask.this) {
-                                mLoadAndBindStepFinished = true;
-                                if (DEBUG_LOADERS) {
-                                    Log.d(TAG, "done with previous binding step");
-                                }
-                                LoaderTask.this.notify();
-                            }
-                        }
-                    });
-
-                while (!mStopped && !mLoadAndBindStepFinished) {
-                    try {
-                        this.wait();
-                    } catch (InterruptedException ex) {
-                        // Ignore
-                    }
-                }
-                if (DEBUG_LOADERS) {
-                    Log.d(TAG, "waited "
-                            + (SystemClock.uptimeMillis()-workspaceWaitTime) 
-                            + "ms for previous step to finish binding");
-                }
-            }
-        }
-
-        public void run() {
-            // Optimize for end-user experience: if the Launcher is up and // running with the
-            // All Apps interface in the foreground, load All Apps first. Otherwise, load the
-            // workspace first (default).
-            final Callbacks cbk = mCallbacks.get();
-            final boolean loadWorkspaceFirst = cbk != null ? (!cbk.isAllAppsVisible()) : true;
-
-            keep_running: {
-                // Elevate priority when Home launches for the first time to avoid
-                // starving at boot time. Staring at a blank home is not cool.
-                synchronized (mLock) {
-                    android.os.Process.setThreadPriority(mIsLaunching
-                            ? Process.THREAD_PRIORITY_DEFAULT : Process.THREAD_PRIORITY_BACKGROUND);
-                }
-
-                if (loadWorkspaceFirst) {
-                    if (DEBUG_LOADERS) Log.d(TAG, "step 1: loading workspace");
-                    loadAndBindWorkspace();
-                } else {
-                    if (DEBUG_LOADERS) Log.d(TAG, "step 1: special: loading all apps");
-                    loadAndBindAllApps();
-                }
-
-                if (mStopped) {
-                    break keep_running;
-                }
-
-                // Whew! Hard work done.  Slow us down, and wait until the UI thread has
-                // settled down.
-                synchronized (mLock) {
-                    if (mIsLaunching) {
-                        android.os.Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND);
-                    }
-                }
-                waitForIdle();
-
-                // second step
-                if (loadWorkspaceFirst) {
-                    if (DEBUG_LOADERS) Log.d(TAG, "step 2: loading all apps");
-                    loadAndBindAllApps();
-                } else {
-                    if (DEBUG_LOADERS) Log.d(TAG, "step 2: special: loading workspace");
-                    loadAndBindWorkspace();
-                }
-            }
-
-            // Clear out this reference, otherwise we end up holding it until all of the
-            // callback runnables are done.
-            mContext = null;
-
-            synchronized (mLock) {
-                // If we are still the last one to be scheduled, remove ourselves.
-                if (mLoaderTask == this) {
-                    mLoaderTask = null;
-                }
-            }
-
-            // Trigger a gc to try to clean up after the stuff is done, since the
-            // renderscript allocations aren't charged to the java heap.
-            if (mStopped) {
-                mHandler.post(new Runnable() {
-                        public void run() {
-                            System.gc();
-                        }
-                    });
-            } else {
-                mHandler.postIdle(new Runnable() {
-                        public void run() {
-                            System.gc();
-                        }
-                    });
-            }
-        }
-
-        public void stopLocked() {
-            synchronized (LoaderTask.this) {
-                mStopped = true;
-                this.notify();
-            }
-        }
-
-        /**
-         * Gets the callbacks object.  If we've been stopped, or if the launcher object
-         * has somehow been garbage collected, return null instead.  Pass in the Callbacks
-         * object that was around when the deferred message was scheduled, and if there's
-         * a new Callbacks object around then also return null.  This will save us from
-         * calling onto it with data that will be ignored.
-         */
-        Callbacks tryGetCallbacks(Callbacks oldCallbacks) {
-            synchronized (mLock) {
-                if (mStopped) {
-                    return null;
-                }
-
-                if (mCallbacks == null) {
-                    return null;
-                }
-
-                final Callbacks callbacks = mCallbacks.get();
-                if (callbacks != oldCallbacks) {
-                    return null;
-                }
-                if (callbacks == null) {
-                    Log.w(TAG, "no mCallbacks");
-                    return null;
-                }
-
-                return callbacks;
-            }
-        }
-
-        // check & update map of what's occupied; used to discard overlapping/invalid items
-        private boolean checkItemPlacement(ItemInfo occupied[][][], ItemInfo item) {
-            if (item.container != LauncherSettings.Favorites.CONTAINER_DESKTOP) {
-                return true;
-            }
-
-            for (int x = item.cellX; x < (item.cellX+item.spanX); x++) {
-                for (int y = item.cellY; y < (item.cellY+item.spanY); y++) {
-                    if (occupied[item.screen][x][y] != null) {
-                        Log.e(TAG, "Error loading shortcut " + item
-                            + " into cell (" + item.screen + ":" 
-                            + x + "," + y
-                            + ") occupied by " 
-                            + occupied[item.screen][x][y]);
-                        return false;
-                    }
-                }
-            }
-            for (int x = item.cellX; x < (item.cellX+item.spanX); x++) {
-                for (int y = item.cellY; y < (item.cellY+item.spanY); y++) {
-                    occupied[item.screen][x][y] = item;
-                }
-            }
-            return true;
-        }
-
-        private void loadWorkspace() {
-            final long t = DEBUG_LOADERS ? SystemClock.uptimeMillis() : 0;
-
-            final Context context = mContext;
-            final ContentResolver contentResolver = context.getContentResolver();
-            final PackageManager manager = context.getPackageManager();
-            final AppWidgetManager widgets = AppWidgetManager.getInstance(context);
-            final boolean isSafeMode = manager.isSafeMode();
-
-            mItems.clear();
-            mAppWidgets.clear();
-            mFolders.clear();
-
-            final ArrayList<Long> itemsToRemove = new ArrayList<Long>();
-
-            final Cursor c = contentResolver.query(
-                    LauncherSettings.Favorites.CONTENT_URI, null, null, null, null);
-
-            final ItemInfo occupied[][][] = new ItemInfo[Launcher.SCREEN_COUNT][Launcher.NUMBER_CELLS_X][Launcher.NUMBER_CELLS_Y];
-
-            try {
-                final int idIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites._ID);
-                final int intentIndex = c.getColumnIndexOrThrow
-                        (LauncherSettings.Favorites.INTENT);
-                final int titleIndex = c.getColumnIndexOrThrow
-                        (LauncherSettings.Favorites.TITLE);
-                final int iconTypeIndex = c.getColumnIndexOrThrow(
-                        LauncherSettings.Favorites.ICON_TYPE);
-                final int iconIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.ICON);
-                final int iconPackageIndex = c.getColumnIndexOrThrow(
-                        LauncherSettings.Favorites.ICON_PACKAGE);
-                final int iconResourceIndex = c.getColumnIndexOrThrow(
-                        LauncherSettings.Favorites.ICON_RESOURCE);
-                final int containerIndex = c.getColumnIndexOrThrow(
-                        LauncherSettings.Favorites.CONTAINER);
-                final int itemTypeIndex = c.getColumnIndexOrThrow(
-                        LauncherSettings.Favorites.ITEM_TYPE);
-                final int appWidgetIdIndex = c.getColumnIndexOrThrow(
-                        LauncherSettings.Favorites.APPWIDGET_ID);
-                final int screenIndex = c.getColumnIndexOrThrow(
-                        LauncherSettings.Favorites.SCREEN);
-                final int cellXIndex = c.getColumnIndexOrThrow
-                        (LauncherSettings.Favorites.CELLX);
-                final int cellYIndex = c.getColumnIndexOrThrow
-                        (LauncherSettings.Favorites.CELLY);
-                final int spanXIndex = c.getColumnIndexOrThrow
-                        (LauncherSettings.Favorites.SPANX);
-                final int spanYIndex = c.getColumnIndexOrThrow(
-                        LauncherSettings.Favorites.SPANY);
-                final int uriIndex = c.getColumnIndexOrThrow(LauncherSettings.Favorites.URI);
-                final int displayModeIndex = c.getColumnIndexOrThrow(
-                        LauncherSettings.Favorites.DISPLAY_MODE);
-
-                ShortcutInfo info;
-                String intentDescription;
-                LauncherAppWidgetInfo appWidgetInfo;
-                int container;
-                long id;
-                Intent intent;
-
-                while (!mStopped && c.moveToNext()) {
-                    try {
-                        int itemType = c.getInt(itemTypeIndex);
-
-                        switch (itemType) {
-                        case LauncherSettings.Favorites.ITEM_TYPE_APPLICATION:
-                        case LauncherSettings.Favorites.ITEM_TYPE_SHORTCUT:
-                            intentDescription = c.getString(intentIndex);
-                            try {
-                                intent = Intent.parseUri(intentDescription, 0);
-                            } catch (URISyntaxException e) {
-                                continue;
-                            }
-
-                            if (itemType == LauncherSettings.Favorites.ITEM_TYPE_APPLICATION) {
-                                info = getShortcutInfo(manager, intent, context, c, iconIndex,
-                                        titleIndex);
-                            } else {
-                                info = getShortcutInfo(c, context, iconTypeIndex,
-                                        iconPackageIndex, iconResourceIndex, iconIndex,
-                                        titleIndex);
-                            }
-
-                            if (info != null) {
-                                updateSavedIcon(context, info, c, iconIndex);
-
-                                info.intent = intent;
-                                info.id = c.getLong(idIndex);
-                                container = c.getInt(containerIndex);
-                                info.container = container;
-                                info.screen = c.getInt(screenIndex);
-                                info.cellX = c.getInt(cellXIndex);
-                                info.cellY = c.getInt(cellYIndex);
-
-                                // check & update map of what's occupied
-                                if (!checkItemPlacement(occupied, info)) {
-                                    break;
-                                }
-
-                                switch (container) {
-                                case LauncherSettings.Favorites.CONTAINER_DESKTOP:
-                                    mItems.add(info);
-                                    break;
-                                default:
-                                    // Item is in a user folder
-                                    UserFolderInfo folderInfo =
-                                            findOrMakeUserFolder(mFolders, container);
-                                    folderInfo.add(info);
-                                    break;
-                                }
-                            } else {
-                                // Failed to load the shortcut, probably because the
-                                // activity manager couldn't resolve it (maybe the app
-                                // was uninstalled), or the db row was somehow screwed up.
-                                // Delete it.
-                                id = c.getLong(idIndex);
-                                Log.e(TAG, "Error loading shortcut " + id + ", removing it");
-                                contentResolver.delete(LauncherSettings.Favorites.getContentUri(
-                                            id, false), null, null);
-                            }
-                            break;
-
-                        case LauncherSettings.Favorites.ITEM_TYPE_USER_FOLDER:
-                            id = c.getLong(idIndex);
-                            UserFolderInfo folderInfo = findOrMakeUserFolder(mFolders, id);
-
-                            folderInfo.title = c.getString(titleIndex);
-
-                            folderInfo.id = id;
-                            container = c.getInt(containerIndex);
-                            folderInfo.container = container;
-                            folderInfo.screen = c.getInt(screenIndex);
-                            folderInfo.cellX = c.getInt(cellXIndex);
-                            folderInfo.cellY = c.getInt(cellYIndex);
-
-                            // check & update map of what's occupied
-                            if (!checkItemPlacement(occupied, folderInfo)) {
-                                break;
-                            }
-
-                            switch (container) {
-                                case LauncherSettings.Favorites.CONTAINER_DESKTOP:
-                                    mItems.add(folderInfo);
-                                    break;
-                            }
-
-                            mFolders.put(folderInfo.id, folderInfo);
-                            break;
-
-                        case LauncherSettings.Favorites.ITEM_TYPE_LIVE_FOLDER:
-                            id = c.getLong(idIndex);
-                            Uri uri = Uri.parse(c.getString(uriIndex));
-
-                            // Make sure the live folder exists
-                            final ProviderInfo providerInfo =
-                                    context.getPackageManager().resolveContentProvider(
-                                            uri.getAuthority(), 0);
-
-                            if (providerInfo == null && !isSafeMode) {
-                                itemsToRemove.add(id);
-                            } else {
-                                LiveFolderInfo liveFolderInfo = findOrMakeLiveFolder(mFolders, id);
-
-                                intentDescription = c.getString(intentIndex);
-                                intent = null;
-                                if (intentDescription != null) {
-                                    try {
-                                        intent = Intent.parseUri(intentDescription, 0);
-                                    } catch (URISyntaxException e) {
-                                        // Ignore, a live folder might not have a base intent
-                                    }
-                                }
-
-                                liveFolderInfo.title = c.getString(titleIndex);
-                                liveFolderInfo.id = id;
-                                liveFolderInfo.uri = uri;
-                                container = c.getInt(containerIndex);
-                                liveFolderInfo.container = container;
-                                liveFolderInfo.screen = c.getInt(screenIndex);
-                                liveFolderInfo.cellX = c.getInt(cellXIndex);
-                                liveFolderInfo.cellY = c.getInt(cellYIndex);
-                                liveFolderInfo.baseIntent = intent;
-                                liveFolderInfo.displayMode = c.getInt(displayModeIndex);
-
-                                // check & update map of what's occupied
-                                if (!checkItemPlacement(occupied, liveFolderInfo)) {
-                                    break;
-                                }
-
-                                loadLiveFolderIcon(context, c, iconTypeIndex, iconPackageIndex,
-                                        iconResourceIndex, liveFolderInfo);
-
-                                switch (container) {
-                                    case LauncherSettings.Favorites.CONTAINER_DESKTOP:
-                                        mItems.add(liveFolderInfo);
-                                        break;
-                                }
-                                mFolders.put(liveFolderInfo.id, liveFolderInfo);
-                            }
-                            break;
-
-                        case LauncherSettings.Favorites.ITEM_TYPE_APPWIDGET:
-                            // Read all Launcher-specific widget details
-                            int appWidgetId = c.getInt(appWidgetIdIndex);
-                            id = c.getLong(idIndex);
-
-                            final AppWidgetProviderInfo provider =
-                                    widgets.getAppWidgetInfo(appWidgetId);
-                            
-                            if (!isSafeMode && (provider == null || provider.provider == null ||
-                                    provider.provider.getPackageName() == null)) {
-                                Log.e(TAG, "Deleting widget that isn't installed anymore: id="
-                                        + id + " appWidgetId=" + appWidgetId);
-                                itemsToRemove.add(id);
-                            } else {
-                                appWidgetInfo = new LauncherAppWidgetInfo(appWidgetId);
-                                appWidgetInfo.id = id;
-                                appWidgetInfo.screen = c.getInt(screenIndex);
-                                appWidgetInfo.cellX = c.getInt(cellXIndex);
-                                appWidgetInfo.cellY = c.getInt(cellYIndex);
-                                appWidgetInfo.spanX = c.getInt(spanXIndex);
-                                appWidgetInfo.spanY = c.getInt(spanYIndex);
-
-                                container = c.getInt(containerIndex);
-                                if (container != LauncherSettings.Favorites.CONTAINER_DESKTOP) {
-                                    Log.e(TAG, "Widget found where container "
-                                            + "!= CONTAINER_DESKTOP -- ignoring!");
-                                    continue;
-                                }
-                                appWidgetInfo.container = c.getInt(containerIndex);
-
-                                // check & update map of what's occupied
-                                if (!checkItemPlacement(occupied, appWidgetInfo)) {
-                                    break;
-                                }
-
-                                mAppWidgets.add(appWidgetInfo);
-                            }
-                            break;
-                        }
-                    } catch (Exception e) {
-                        Log.w(TAG, "Desktop items loading interrupted:", e);
-                    }
-                }
-            } finally {
-                c.close();
-            }
-
-            if (itemsToRemove.size() > 0) {
-                ContentProviderClient client = contentResolver.acquireContentProviderClient(
-                                LauncherSettings.Favorites.CONTENT_URI);
-                // Remove dead items
-                for (long id : itemsToRemove) {
-                    if (DEBUG_LOADERS) {
-                        Log.d(TAG, "Removed id = " + id);
-                    }
-                    // Don't notify content observers
-                    try {
-                        client.delete(LauncherSettings.Favorites.getContentUri(id, false),
-                                null, null);
-                    } catch (RemoteException e) {
-                        Log.w(TAG, "Could not remove id = " + id);
-                    }
-                }
-            }
-
-            if (DEBUG_LOADERS) {
-                Log.d(TAG, "loaded workspace in " + (SystemClock.uptimeMillis()-t) + "ms");
-                Log.d(TAG, "workspace layout: ");
-                for (int y = 0; y < Launcher.NUMBER_CELLS_Y; y++) {
-                    String line = "";
-                    for (int s = 0; s < Launcher.SCREEN_COUNT; s++) {
-                        if (s > 0) {
-                            line += " | ";
-                        }
-                        for (int x = 0; x < Launcher.NUMBER_CELLS_X; x++) {
-                            line += ((occupied[s][x][y] != null) ? "#" : ".");
-                        }
-                    }
-                    Log.d(TAG, "[ " + line + " ]");
-                }
-            }
-        }
-
-        /**
-         * Read everything out of our database.
-         */
-        private void bindWorkspace() {
-            final long t = SystemClock.uptimeMillis();
-
-            // Don't use these two variables in any of the callback runnables.
-            // Otherwise we hold a reference to them.
-            final Callbacks oldCallbacks = mCallbacks.get();
-            if (oldCallbacks == null) {
-                // This launcher has exited and nobody bothered to tell us.  Just bail.
-                Log.w(TAG, "LoaderTask running with no launcher");
-                return;
-            }
-
-            int N;
-            // Tell the workspace that we're about to start firing items at it
-            mHandler.post(new Runnable() {
-                public void run() {
-                    Callbacks callbacks = tryGetCallbacks(oldCallbacks);
-                    if (callbacks != null) {
-                        callbacks.startBinding();
-                    }
-                }
-            });
-            // Add the items to the workspace.
-            N = mItems.size();
-            for (int i=0; i<N; i+=ITEMS_CHUNK) {
-                final int start = i;
-                final int chunkSize = (i+ITEMS_CHUNK <= N) ? ITEMS_CHUNK : (N-i);
-                mHandler.post(new Runnable() {
-                    public void run() {
-                        Callbacks callbacks = tryGetCallbacks(oldCallbacks);
-                        if (callbacks != null) {
-                            callbacks.bindItems(mItems, start, start+chunkSize);
-                        }
-                    }
-                });
-            }
-            mHandler.post(new Runnable() {
-                public void run() {
-                    Callbacks callbacks = tryGetCallbacks(oldCallbacks);
-                    if (callbacks != null) {
-                        callbacks.bindFolders(mFolders);
-                    }
-                }
-            });
-            // Wait until the queue goes empty.
-            mHandler.post(new Runnable() {
-                public void run() {
-                    if (DEBUG_LOADERS) {
-                        Log.d(TAG, "Going to start binding widgets soon.");
-                    }
-                }
-            });
-            // Bind the widgets, one at a time.
-            // WARNING: this is calling into the workspace from the background thread,
-            // but since getCurrentScreen() just returns the int, we should be okay.  This
-            // is just a hint for the order, and if it's wrong, we'll be okay.
-            // TODO: instead, we should have that push the current screen into here.
-            final int currentScreen = oldCallbacks.getCurrentWorkspaceScreen();
-            N = mAppWidgets.size();
-            // once for the current screen
-            for (int i=0; i<N; i++) {
-                final LauncherAppWidgetInfo widget = mAppWidgets.get(i);
-                if (widget.screen == currentScreen) {
-                    mHandler.post(new Runnable() {
-                        public void run() {
-                            Callbacks callbacks = tryGetCallbacks(oldCallbacks);
-                            if (callbacks != null) {
-                                callbacks.bindAppWidget(widget);
-                            }
-                        }
-                    });
-                }
-            }
-            // once for the other screens
-            for (int i=0; i<N; i++) {
-                final LauncherAppWidgetInfo widget = mAppWidgets.get(i);
-                if (widget.screen != currentScreen) {
-                    mHandler.post(new Runnable() {
-                        public void run() {
-                            Callbacks callbacks = tryGetCallbacks(oldCallbacks);
-                            if (callbacks != null) {
-                                callbacks.bindAppWidget(widget);
-                            }
-                        }
-                    });
-                }
-            }
-            // Tell the workspace that we're done.
-            mHandler.post(new Runnable() {
-                public void run() {
-                    Callbacks callbacks = tryGetCallbacks(oldCallbacks);
-                    if (callbacks != null) {
-                        callbacks.finishBindingItems();
-                    }
-                }
-            });
-            // If we're profiling, this is the last thing in the queue.
-            mHandler.post(new Runnable() {
-                public void run() {
-                    if (DEBUG_LOADERS) {
-                        Log.d(TAG, "bound workspace in "
-                            + (SystemClock.uptimeMillis()-t) + "ms");
-                    }
-                }
-            });
-        }
-
-        private void loadAndBindAllApps() {
-            if (DEBUG_LOADERS) {
-                Log.d(TAG, "loadAndBindAllApps mAllAppsLoaded=" + mAllAppsLoaded);
-            }
-            if (!mAllAppsLoaded) {
-                loadAllAppsByBatch();
-                if (mStopped) {
-                    return;
-                }
-                mAllAppsLoaded = true;
-            } else {
-                onlyBindAllApps();
-            }
-        }
-
-        private void onlyBindAllApps() {
-            final Callbacks oldCallbacks = mCallbacks.get();
-            if (oldCallbacks == null) {
-                // This launcher has exited and nobody bothered to tell us.  Just bail.
-                Log.w(TAG, "LoaderTask running with no launcher (onlyBindAllApps)");
-                return;
-            }
-
-            // shallow copy
-            final ArrayList<ApplicationInfo> list
-                    = (ArrayList<ApplicationInfo>)mAllAppsList.data.clone();
-            mHandler.post(new Runnable() {
-                public void run() {
-                    final long t = SystemClock.uptimeMillis();
-                    final Callbacks callbacks = tryGetCallbacks(oldCallbacks);
-                    if (callbacks != null) {
-                        callbacks.bindAllApplications(list);
-                    }
-                    if (DEBUG_LOADERS) {
-                        Log.d(TAG, "bound all " + list.size() + " apps from cache in "
-                                + (SystemClock.uptimeMillis()-t) + "ms");
-                    }
-                }
-            });
-
-        }
-
-        private void loadAllAppsByBatch() {
-            final long t = DEBUG_LOADERS ? SystemClock.uptimeMillis() : 0;
-
-            // Don't use these two variables in any of the callback runnables.
-            // Otherwise we hold a reference to them.
-            final Callbacks oldCallbacks = mCallbacks.get();
-            if (oldCallbacks == null) {
-                // This launcher has exited and nobody bothered to tell us.  Just bail.
-                Log.w(TAG, "LoaderTask running with no launcher (loadAllAppsByBatch)");
-                return;
-            }
-
-            final Intent mainIntent = new Intent(Intent.ACTION_MAIN, null);
-            mainIntent.addCategory(Intent.CATEGORY_LAUNCHER);
-
-            final PackageManager packageManager = mContext.getPackageManager();
-            List<ResolveInfo> apps = null;
-
-            int N = Integer.MAX_VALUE;
-
-            int startIndex;
-            int i=0;
-            int batchSize = -1;
-            while (i < N && !mStopped) {
-                if (i == 0) {
-                    mAllAppsList.clear();
-                    final long qiaTime = DEBUG_LOADERS ? SystemClock.uptimeMillis() : 0;
-                    apps = packageManager.queryIntentActivities(mainIntent, 0);
-                    if (DEBUG_LOADERS) {
-                        Log.d(TAG, "queryIntentActivities took "
-                                + (SystemClock.uptimeMillis()-qiaTime) + "ms");
-                    }
-                    if (apps == null) {
-                        return;
-                    }
-                    N = apps.size();
-                    if (DEBUG_LOADERS) {
-                        Log.d(TAG, "queryIntentActivities got " + N + " apps");
-                    }
-                    if (N == 0) {
-                        // There are no apps?!?
-                        return;
-                    }
-                    if (mBatchSize == 0) {
-                        batchSize = N;
-                    } else {
-                        batchSize = mBatchSize;
-                    }
-
-                    final long sortTime = DEBUG_LOADERS ? SystemClock.uptimeMillis() : 0;
-                    Collections.sort(apps,
-                            new ResolveInfo.DisplayNameComparator(packageManager));
-                    if (DEBUG_LOADERS) {
-                        Log.d(TAG, "sort took "
-                                + (SystemClock.uptimeMillis()-sortTime) + "ms");
-                    }
-                }
-
-                final long t2 = DEBUG_LOADERS ? SystemClock.uptimeMillis() : 0;
-
-                startIndex = i;
-                for (int j=0; i<N && j<batchSize; j++) {
-                    // This builds the icon bitmaps.
-                    mAllAppsList.add(new ApplicationInfo(apps.get(i), mIconCache));
-                    i++;
-                }
-
-                final boolean first = i <= batchSize;
-                final Callbacks callbacks = tryGetCallbacks(oldCallbacks);
-                final ArrayList<ApplicationInfo> added = mAllAppsList.added;
-                mAllAppsList.added = new ArrayList<ApplicationInfo>();
-
-                mHandler.post(new Runnable() {
-                    public void run() {
-                        final long t = SystemClock.uptimeMillis();
-                        if (callbacks != null) {
-                            if (first) {
-                                callbacks.bindAllApplications(added);
-                            } else {
-                                callbacks.bindAppsAdded(added);
-                            }
-                            if (DEBUG_LOADERS) {
-                                Log.d(TAG, "bound " + added.size() + " apps in "
-                                    + (SystemClock.uptimeMillis() - t) + "ms");
-                            }
-                        } else {
-                            Log.i(TAG, "not binding apps: no Launcher activity");
-                        }
-                    }
-                });
-
-                if (DEBUG_LOADERS) {
-                    Log.d(TAG, "batch of " + (i-startIndex) + " icons processed in "
-                            + (SystemClock.uptimeMillis()-t2) + "ms");
-                }
-
-                if (mAllAppsLoadDelay > 0 && i < N) {
-                    try {
-                        if (DEBUG_LOADERS) {
-                            Log.d(TAG, "sleeping for " + mAllAppsLoadDelay + "ms");
-                        }
-                        Thread.sleep(mAllAppsLoadDelay);
-                    } catch (InterruptedException exc) { }
-                }
-            }
-
-            if (DEBUG_LOADERS) {
-                Log.d(TAG, "cached all " + N + " apps in "
-                        + (SystemClock.uptimeMillis()-t) + "ms"
-                        + (mAllAppsLoadDelay > 0 ? " (including delay)" : ""));
-            }
-        }
-
-        public void dumpState() {
-            Log.d(TAG, "mLoaderTask.mContext=" + mContext);
-            Log.d(TAG, "mLoaderTask.mWaitThread=" + mWaitThread);
-            Log.d(TAG, "mLoaderTask.mIsLaunching=" + mIsLaunching);
-            Log.d(TAG, "mLoaderTask.mStopped=" + mStopped);
-            Log.d(TAG, "mLoaderTask.mLoadAndBindStepFinished=" + mLoadAndBindStepFinished);
-        }
-    }
-
-    void enqueuePackageUpdated(PackageUpdatedTask task) {
-        sWorker.post(task);
-    }
-
-    private class PackageUpdatedTask implements Runnable {
-        int mOp;
-        String[] mPackages;
-
-        public static final int OP_NONE = 0;
-        public static final int OP_ADD = 1;
-        public static final int OP_UPDATE = 2;
-        public static final int OP_REMOVE = 3; // uninstlled
-        public static final int OP_UNAVAILABLE = 4; // external media unmounted
-
-
-        public PackageUpdatedTask(int op, String[] packages) {
-            mOp = op;
-            mPackages = packages;
-        }
-
-        public void run() {
-            final Context context = mApp;
-
-            final String[] packages = mPackages;
-            final int N = packages.length;
-            switch (mOp) {
-                case OP_ADD:
-                    for (int i=0; i<N; i++) {
-                        if (DEBUG_LOADERS) Log.d(TAG, "mAllAppsList.addPackage " + packages[i]);
-                        mAllAppsList.addPackage(context, packages[i]);
-                    }
-                    break;
-                case OP_UPDATE:
-                    for (int i=0; i<N; i++) {
-                        if (DEBUG_LOADERS) Log.d(TAG, "mAllAppsList.updatePackage " + packages[i]);
-                        mAllAppsList.updatePackage(context, packages[i]);
-                    }
-                    break;
-                case OP_REMOVE:
-                case OP_UNAVAILABLE:
-                    for (int i=0; i<N; i++) {
-                        if (DEBUG_LOADERS) Log.d(TAG, "mAllAppsList.removePackage " + packages[i]);
-                        mAllAppsList.removePackage(packages[i]);
-                    }
-                    break;
-            }
-
-            ArrayList<ApplicationInfo> added = null;
-            ArrayList<ApplicationInfo> removed = null;
-            ArrayList<ApplicationInfo> modified = null;
-
-            if (mAllAppsList.added.size() > 0) {
-                added = mAllAppsList.added;
-                mAllAppsList.added = new ArrayList<ApplicationInfo>();
-            }
-            if (mAllAppsList.removed.size() > 0) {
-                removed = mAllAppsList.removed;
-                mAllAppsList.removed = new ArrayList<ApplicationInfo>();
-                for (ApplicationInfo info: removed) {
-                    mIconCache.remove(info.intent.getComponent());
-                }
-            }
-            if (mAllAppsList.modified.size() > 0) {
-                modified = mAllAppsList.modified;
-                mAllAppsList.modified = new ArrayList<ApplicationInfo>();
-            }
-
-            final Callbacks callbacks = mCallbacks != null ? mCallbacks.get() : null;
-            if (callbacks == null) {
-                Log.w(TAG, "Nobody to tell about the new app.  Launcher is probably loading.");
-                return;
-            }
-
-            if (added != null) {
-                final ArrayList<ApplicationInfo> addedFinal = added;
-                mHandler.post(new Runnable() {
-                    public void run() {
-                        if (callbacks == mCallbacks.get()) {
-                            callbacks.bindAppsAdded(addedFinal);
-                        }
-                    }
-                });
-            }
-            if (modified != null) {
-                final ArrayList<ApplicationInfo> modifiedFinal = modified;
-                mHandler.post(new Runnable() {
-                    public void run() {
-                        if (callbacks == mCallbacks.get()) {
-                            callbacks.bindAppsUpdated(modifiedFinal);
-                        }
-                    }
-                });
-            }
-            if (removed != null) {
-                final boolean permanent = mOp != OP_UNAVAILABLE;
-                final ArrayList<ApplicationInfo> removedFinal = removed;
-                mHandler.post(new Runnable() {
-                    public void run() {
-                        if (callbacks == mCallbacks.get()) {
-                            callbacks.bindAppsRemoved(removedFinal, permanent);
-                        }
-                    }
-                });
-            }
-        }
-    }
-
-    /**
-     * This is called from the code that adds shortcuts from the intent receiver.  This
-     * doesn't have a Cursor, but
-     */
-    public ShortcutInfo getShortcutInfo(PackageManager manager, Intent intent, Context context) {
-        return getShortcutInfo(manager, intent, context, null, -1, -1);
-    }
-
-    /**
-     * Make an ShortcutInfo object for a shortcut that is an application.
-     *
-     * If c is not null, then it will be used to fill in missing data like the title and icon.
-     */
-    public ShortcutInfo getShortcutInfo(PackageManager manager, Intent intent, Context context,
-            Cursor c, int iconIndex, int titleIndex) {
-        Bitmap icon = null;
-        final ShortcutInfo info = new ShortcutInfo();
-
-        ComponentName componentName = intent.getComponent();
-        if (componentName == null) {
-            return null;
-        }
-
-        // TODO: See if the PackageManager knows about this case.  If it doesn't
-        // then return null & delete this.
-
-        // the resource -- This may implicitly give us back the fallback icon,
-        // but don't worry about that.  All we're doing with usingFallbackIcon is
-        // to avoid saving lots of copies of that in the database, and most apps
-        // have icons anyway.
-        final ResolveInfo resolveInfo = manager.resolveActivity(intent, 0);
-        if (resolveInfo != null) {
-            icon = mIconCache.getIcon(componentName, resolveInfo);
-        }
-        // the db
-        if (icon == null) {
-            if (c != null) {
-                icon = getIconFromCursor(c, iconIndex);
-            }
-        }
-        // the fallback icon
-        if (icon == null) {
-            icon = getFallbackIcon();
-            info.usingFallbackIcon = true;
-        }
-        info.setIcon(icon);
-
-        // from the resource
-        if (resolveInfo != null) {
-            info.title = resolveInfo.activityInfo.loadLabel(manager);
-        }
-        // from the db
-        if (info.title == null) {
-            if (c != null) {
-                info.title =  c.getString(titleIndex);
-            }
-        }
-        // fall back to the class name of the activity
-        if (info.title == null) {
-            info.title = componentName.getClassName();
-        }
-        info.itemType = LauncherSettings.Favorites.ITEM_TYPE_APPLICATION;
-        return info;
-    }
-
-    /**
-     * Make an ShortcutInfo object for a shortcut that isn't an application.
-     */
-    private ShortcutInfo getShortcutInfo(Cursor c, Context context,
-            int iconTypeIndex, int iconPackageIndex, int iconResourceIndex, int iconIndex,
-            int titleIndex) {
-
-        Bitmap icon = null;
-        final ShortcutInfo info = new ShortcutInfo();
-        info.itemType = LauncherSettings.Favorites.ITEM_TYPE_SHORTCUT;
-
-        // TODO: If there's an explicit component and we can't install that, delete it.
-
-        info.title = c.getString(titleIndex);
-
-        int iconType = c.getInt(iconTypeIndex);
-        switch (iconType) {
-        case LauncherSettings.Favorites.ICON_TYPE_RESOURCE:
-            String packageName = c.getString(iconPackageIndex);
-            String resourceName = c.getString(iconResourceIndex);
-            PackageManager packageManager = context.getPackageManager();
-            info.customIcon = false;
-            // the resource
-            try {
-                Resources resources = packageManager.getResourcesForApplication(packageName);
-                if (resources != null) {
-                    final int id = resources.getIdentifier(resourceName, null, null);
-                    icon = Utilities.createIconBitmap(resources.getDrawable(id), context);
-                }
-            } catch (Exception e) {
-                // drop this.  we have other places to look for icons
-            }
-            // the db
-            if (icon == null) {
-                icon = getIconFromCursor(c, iconIndex);
-            }
-            // the fallback icon
-            if (icon == null) {
-                icon = getFallbackIcon();
-                info.usingFallbackIcon = true;
-            }
-            break;
-        case LauncherSettings.Favorites.ICON_TYPE_BITMAP:
-            icon = getIconFromCursor(c, iconIndex);
-            if (icon == null) {
-                icon = getFallbackIcon();
-                info.customIcon = false;
-                info.usingFallbackIcon = true;
-            } else {
-                info.customIcon = true;
-            }
-            break;
-        default:
-            icon = getFallbackIcon();
-            info.usingFallbackIcon = true;
-            info.customIcon = false;
-            break;
-        }
-        info.setIcon(icon);
-        return info;
-    }
-
-    Bitmap getIconFromCursor(Cursor c, int iconIndex) {
-        if (false) {
-            Log.d(TAG, "getIconFromCursor app="
-                    + c.getString(c.getColumnIndexOrThrow(LauncherSettings.Favorites.TITLE)));
-        }
-        byte[] data = c.getBlob(iconIndex);
-        try {
-            return BitmapFactory.decodeByteArray(data, 0, data.length);
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    ShortcutInfo addShortcut(Context context, Intent data,
-            CellLayout.CellInfo cellInfo, boolean notify) {
-
-        final ShortcutInfo info = infoFromShortcutIntent(context, data);
-        addItemToDatabase(context, info, LauncherSettings.Favorites.CONTAINER_DESKTOP,
-                cellInfo.screen, cellInfo.cellX, cellInfo.cellY, notify);
-
-        return info;
-    }
-
-    private ShortcutInfo infoFromShortcutIntent(Context context, Intent data) {
-        Intent intent = data.getParcelableExtra(Intent.EXTRA_SHORTCUT_INTENT);
-        String name = data.getStringExtra(Intent.EXTRA_SHORTCUT_NAME);
-        Parcelable bitmap = data.getParcelableExtra(Intent.EXTRA_SHORTCUT_ICON);
-
-        Bitmap icon = null;
-        boolean filtered = false;
-        boolean customIcon = false;
-        ShortcutIconResource iconResource = null;
-
-        if (bitmap != null && bitmap instanceof Bitmap) {
-            icon = Utilities.createIconBitmap(new FastBitmapDrawable((Bitmap)bitmap), context);
-            filtered = true;
-            customIcon = true;
-        } else {
-            Parcelable extra = data.getParcelableExtra(Intent.EXTRA_SHORTCUT_ICON_RESOURCE);
-            if (extra != null && extra instanceof ShortcutIconResource) {
+    static Drawable getIcon(PackageManager manager, Context context, ActivityInfo activityInfo) {
+        String themePackage=AlmostNexusSettingsHelper.getThemePackageName(context, Launcher.THEME_DEFAULT);
+        Drawable icon = null;
+        if(themePackage.equals(Launcher.THEME_DEFAULT)){
+            icon = Utilities.createIconThumbnail(activityInfo.loadIcon(manager), context);
+        }else{
+            // get from theme
+            Resources themeResources = null;
+            if(AlmostNexusSettingsHelper.getThemeIcons(context)){
+                activityInfo.name=activityInfo.name.toLowerCase().replace(".", "_");
                 try {
-                    iconResource = (ShortcutIconResource) extra;
-                    final PackageManager packageManager = context.getPackageManager();
-                    Resources resources = packageManager.getResourcesForApplication(
-                            iconResource.packageName);
-                    final int id = resources.getIdentifier(iconResource.resourceName, null, null);
-                    icon = Utilities.createIconBitmap(resources.getDrawable(id), context);
-                } catch (Exception e) {
-                    Log.w(TAG, "Could not load shortcut icon: " + extra);
+                    themeResources = manager.getResourcesForApplication(themePackage);
+                } catch (NameNotFoundException e) {
+                    //e.printStackTrace();
+                }
+                if(themeResources!=null){
+                    int resource_id = themeResources.getIdentifier(activityInfo.name, "drawable", themePackage);
+                    if(resource_id!=0){
+                        icon=themeResources.getDrawable(resource_id);
+                    }
+
+                    // use IconShader
+                    if(icon==null){
+                        if (compiledIconShaderName==null ||
+                            compiledIconShaderName.compareTo(themePackage)!=0){
+                            compiledIconShader = null;
+                            resource_id = themeResources.getIdentifier("shader", "xml", themePackage);
+                            if(resource_id!=0){
+                                XmlResourceParser xpp = themeResources.getXml(resource_id);
+                                compiledIconShader = IconShader.parseXml(xpp);
+                            }
+                        }
+
+                        if(compiledIconShader!=null){
+                            icon = Utilities.createIconThumbnail(activityInfo.loadIcon(manager), context);
+                            try {
+                                icon = IconShader.processIcon(icon, compiledIconShader);
+                            } catch (Exception e) {}
+                        }
+                    }
+                }
+            }
+
+            if(icon==null){
+                icon = Utilities.createIconThumbnail(activityInfo.loadIcon(manager), context);
+            }else{
+                icon = Utilities.createIconThumbnail(icon, context);
+            }
+        }
+        return icon;
+    }
+    /**
+     * Resize an item in the DB to a new <container, screen, cellX, cellY>
+     */
+    static void resizeItemInDatabase(Context context, ItemInfo item, long container, int screen,
+            int cellX, int cellY, int spanX, int spanY) {
+        item.container = container;
+        item.screen = screen;
+        item.cellX = cellX;
+        item.cellY = cellY;
+        item.spanX = spanX;
+        item.spanY = spanY;
+
+        final ContentValues values = new ContentValues();
+        final ContentResolver cr = context.getContentResolver();
+
+        values.put(LauncherSettings.Favorites.CONTAINER, item.container);
+        values.put(LauncherSettings.Favorites.CELLX, item.cellX);
+        values.put(LauncherSettings.Favorites.CELLY, item.cellY);
+        values.put(LauncherSettings.Favorites.SPANX, item.spanX);
+        values.put(LauncherSettings.Favorites.SPANY, item.spanY);
+        values.put(LauncherSettings.Favorites.SCREEN, item.screen);
+
+        cr.update(LauncherSettings.Favorites.getContentUri(item.id, false), values, null, null);
+    }
+    boolean ocuppiedArea(int screen,int id,Rect rect){
+        final ArrayList<ItemInfo>desktopItems=mDesktopItems;
+        int count =desktopItems.size();
+        Rect r=new Rect();
+        for (int i=0;i<count;i++){
+            if(desktopItems.get(i).screen==screen){
+                ItemInfo it=desktopItems.get(i);
+                r.set(it.cellX,it.cellY,it.cellX+it.spanX,it.cellY+it.spanY);
+                if(rect.intersect(r)){
+                    return true;
                 }
             }
         }
-
-        final ShortcutInfo info = new ShortcutInfo();
-
-        if (icon == null) {
-            icon = getFallbackIcon();
-            info.usingFallbackIcon = true;
-        }
-        info.setIcon(icon);
-
-        info.title = name;
-        info.intent = intent;
-        info.customIcon = customIcon;
-        info.iconResource = iconResource;
-
-        return info;
-    }
-
-    private static void loadLiveFolderIcon(Context context, Cursor c, int iconTypeIndex,
-            int iconPackageIndex, int iconResourceIndex, LiveFolderInfo liveFolderInfo) {
-
-        int iconType = c.getInt(iconTypeIndex);
-        switch (iconType) {
-        case LauncherSettings.Favorites.ICON_TYPE_RESOURCE:
-            String packageName = c.getString(iconPackageIndex);
-            String resourceName = c.getString(iconResourceIndex);
-            PackageManager packageManager = context.getPackageManager();
-            try {
-                Resources resources = packageManager.getResourcesForApplication(packageName);
-                final int id = resources.getIdentifier(resourceName, null, null);
-                liveFolderInfo.icon = Utilities.createIconBitmap(resources.getDrawable(id),
-                        context);
-            } catch (Exception e) {
-                liveFolderInfo.icon = Utilities.createIconBitmap(
-                        context.getResources().getDrawable(R.drawable.ic_launcher_folder),
-                        context);
-            }
-            liveFolderInfo.iconResource = new Intent.ShortcutIconResource();
-            liveFolderInfo.iconResource.packageName = packageName;
-            liveFolderInfo.iconResource.resourceName = resourceName;
-            break;
-        default:
-            liveFolderInfo.icon = Utilities.createIconBitmap(
-                    context.getResources().getDrawable(R.drawable.ic_launcher_folder),
-                    context);
-        }
-    }
-
-    void updateSavedIcon(Context context, ShortcutInfo info, Cursor c, int iconIndex) {
-        // If this icon doesn't have a custom icon, check to see
-        // what's stored in the DB, and if it doesn't match what
-        // we're going to show, store what we are going to show back
-        // into the DB.  We do this so when we're loading, if the
-        // package manager can't find an icon (for example because
-        // the app is on SD) then we can use that instead.
-        if (!info.customIcon && !info.usingFallbackIcon) {
-            boolean needSave;
-            byte[] data = c.getBlob(iconIndex);
-            try {
-                if (data != null) {
-                    Bitmap saved = BitmapFactory.decodeByteArray(data, 0, data.length);
-                    Bitmap loaded = info.getIcon(mIconCache);
-                    needSave = !saved.sameAs(loaded);
-                } else {
-                    needSave = true;
+        final ArrayList<LauncherAppWidgetInfo>desktopWidgets=mDesktopAppWidgets;
+        count=desktopWidgets.size();
+        for (int i=0;i<count;i++){
+            if(desktopWidgets.get(i).screen==screen){
+                LauncherAppWidgetInfo it=desktopWidgets.get(i);
+                if(id!=it.appWidgetId){
+                    r.set(it.cellX,it.cellY,it.cellX+it.spanX,it.cellY+it.spanY);
+                    if(rect.intersect(r)){
+                        return true;
+                    }
                 }
-            } catch (Exception e) {
-                needSave = true;
-            }
-            if (needSave) {
-                Log.d(TAG, "going to save icon bitmap for info=" + info);
-                // This is slower than is ideal, but this only happens either
-                // after the froyo OTA or when the app is updated with a new
-                // icon.
-                updateItemInDatabase(context, info);
             }
         }
+        return false;
     }
-
-    /**
-     * Return an existing UserFolderInfo object if we have encountered this ID previously,
-     * or make a new one.
-     */
-    private static UserFolderInfo findOrMakeUserFolder(HashMap<Long, FolderInfo> folders, long id) {
-        // See if a placeholder was created for us already
-        FolderInfo folderInfo = folders.get(id);
-        if (folderInfo == null || !(folderInfo instanceof UserFolderInfo)) {
-            // No placeholder -- create a new instance
-            folderInfo = new UserFolderInfo();
-            folders.put(id, folderInfo);
+    synchronized void updateCounterForPackage(Launcher launcher, String packageName, int counter) {
+        if (mApplicationsLoader != null && mApplicationsLoader.isRunning()) {
+            startApplicationsLoaderLocked(launcher, false);
+            return;
         }
-        return (UserFolderInfo) folderInfo;
-    }
-
-    /**
-     * Return an existing UserFolderInfo object if we have encountered this ID previously, or make a
-     * new one.
-     */
-    private static LiveFolderInfo findOrMakeLiveFolder(HashMap<Long, FolderInfo> folders, long id) {
-        // See if a placeholder was created for us already
-        FolderInfo folderInfo = folders.get(id);
-        if (folderInfo == null || !(folderInfo instanceof LiveFolderInfo)) {
-            // No placeholder -- create a new instance
-            folderInfo = new LiveFolderInfo();
-            folders.put(id, folderInfo);
-        }
-        return (LiveFolderInfo) folderInfo;
-    }
-
-    private static String getLabel(PackageManager manager, ActivityInfo activityInfo) {
-        String label = activityInfo.loadLabel(manager).toString();
-        if (label == null) {
-            label = manager.getApplicationLabel(activityInfo.applicationInfo).toString();
-            if (label == null) {
-                label = activityInfo.name;
+        boolean changed=false;
+        if (packageName != null && packageName.length() > 0 && mApplicationsAdapter!=null) {
+            final int count=mApplications.size();
+            for (int i = 0; i < count; i++) {
+                final ApplicationInfo info = mApplications.get(i);
+                final Intent intent = info.intent;
+                final ComponentName name = intent.getComponent();
+                if (info.itemType == LauncherSettings.Favorites.ITEM_TYPE_APPLICATION &&
+                        packageName.equals(name.getPackageName()) &&
+                        info.counter!=counter) {
+                    info.counter=counter;
+                    changed=true;
+                }
             }
         }
-        return label;
+        if(changed)mApplicationsAdapter.notifyDataSetChanged();
     }
-
-    private static final Collator sCollator = Collator.getInstance();
-    public static final Comparator<ApplicationInfo> APP_NAME_COMPARATOR
-            = new Comparator<ApplicationInfo>() {
-        public final int compare(ApplicationInfo a, ApplicationInfo b) {
-            return sCollator.compare(a.title.toString(), b.title.toString());
-        }
-    };
-
-    public void dumpState() {
-        Log.d(TAG, "mCallbacks=" + mCallbacks);
-        ApplicationInfo.dumpApplicationInfoList(TAG, "mAllAppsList.data", mAllAppsList.data);
-        ApplicationInfo.dumpApplicationInfoList(TAG, "mAllAppsList.added", mAllAppsList.added);
-        ApplicationInfo.dumpApplicationInfoList(TAG, "mAllAppsList.removed", mAllAppsList.removed);
-        ApplicationInfo.dumpApplicationInfoList(TAG, "mAllAppsList.modified", mAllAppsList.modified);
-        Log.d(TAG, "mItems size=" + mItems.size());
-        if (mLoaderTask != null) {
-            mLoaderTask.dumpState();
-        } else {
-            Log.d(TAG, "mLoaderTask=null");
+    void updateCounterDesktopItem(ItemInfo info, int counter) {
+        // TODO: write to DB; figure out if we should remove folder from folders list
+        if(mDesktopItems.get(mDesktopItems.indexOf(info)) instanceof ApplicationInfo){
+            ((ApplicationInfo)mDesktopItems.get(mDesktopItems.indexOf(info))).counter=counter;
         }
     }
 }
