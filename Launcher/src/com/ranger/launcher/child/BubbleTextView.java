@@ -16,8 +16,11 @@
 
 package com.ranger.launcher.child;
 
-import android.widget.TextView;
+import com.ranger.launcher.child.R;
+
 import android.content.Context;
+import android.content.pm.PackageManager.NameNotFoundException;
+import android.content.res.Resources;
 import android.util.AttributeSet;
 import android.graphics.Canvas;
 import android.graphics.Paint;
@@ -30,10 +33,10 @@ import android.text.Layout;
  * because we want to make the bubble taller than the text and TextView's clip is
  * too aggressive.
  */
-public class BubbleTextView extends TextView {
-    static final float CORNER_RADIUS = 8.0f;
-    static final float PADDING_H = 5.0f;
-    static final float PADDING_V = 1.0f;
+public class BubbleTextView extends CounterTextView {
+    //private static final float CORNER_RADIUS = 8.0f;
+    private static final float PADDING_H = 5.0f;
+    private static final float PADDING_V = 1.0f;
 
     private final RectF mRect = new RectF();
     private Paint mPaint;
@@ -43,7 +46,8 @@ public class BubbleTextView extends TextView {
     private float mCornerRadius;
     private float mPaddingH;
     private float mPaddingV;
-
+    //adw custom corner radius themable
+    private float mCustomCornerRadius=8.0f;
     public BubbleTextView(Context context) {
         super(context);
         init();
@@ -61,14 +65,42 @@ public class BubbleTextView extends TextView {
 
     private void init() {
         setFocusable(true);
-        mBackground = getBackground();
+        //mBackground = getBackground();
+        mBackground=IconHighlights.getDrawable(getContext(),IconHighlights.TYPE_DESKTOP);
         setBackgroundDrawable(null);
-
+        mBackground.setCallback(this);
+        //ADW: Load textcolor and bubble color from theme
+        String themePackage=AlmostNexusSettingsHelper.getThemePackageName(getContext(), Launcher.THEME_DEFAULT);
+        int color=getContext().getResources().getColor(R.color.bubble_dark_background);
+        if(!themePackage.equals(Launcher.THEME_DEFAULT)){
+        	Resources themeResources=null;
+        	try {
+    			themeResources=getContext().getPackageManager().getResourcesForApplication(themePackage);
+    		} catch (NameNotFoundException e) {
+    			//e.printStackTrace();
+    		}
+    		if(themeResources!=null){
+    			int resourceId=themeResources.getIdentifier("bubble_color", "color", themePackage);
+    			if(resourceId!=0){
+    				color=themeResources.getColor(resourceId);
+    			}
+    			int textColorId=themeResources.getIdentifier("bubble_text_color", "color", themePackage);
+    			if(textColorId!=0){
+    				setTextColor(themeResources.getColor(textColorId));
+    			}
+    			int cornerId=themeResources.getIdentifier("bubble_radius", "integer", themePackage);
+    			if(cornerId!=0){
+    				mCustomCornerRadius=(float)themeResources.getInteger(cornerId);
+    			}
+    		}
+        }
+        
         mPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        mPaint.setColor(getContext().getResources().getColor(R.color.bubble_dark_background));
-
+        //mPaint.setColor(getContext().getResources().getColor(R.color.bubble_dark_background));
+        mPaint.setColor(color);
         final float scale = getContext().getResources().getDisplayMetrics().density;
-        mCornerRadius = CORNER_RADIUS * scale;
+        //mCornerRadius = CORNER_RADIUS * scale;
+        mCornerRadius = mCustomCornerRadius * scale;
         mPaddingH = PADDING_H * scale;
         //noinspection PointlessArithmeticExpression
         mPaddingV = PADDING_V * scale;
@@ -117,29 +149,18 @@ public class BubbleTextView extends TextView {
             }
         }
 
-        final Layout layout = getLayout();
-        final RectF rect = mRect;
-        final int left = getCompoundPaddingLeft();
-        final int top = getExtendedPaddingTop();
-
-        rect.set(left + layout.getLineLeft(0) - mPaddingH,
-                top + layout.getLineTop(0) -  mPaddingV,
-                Math.min(left + layout.getLineRight(0) + mPaddingH, mScrollX + mRight - mLeft),
-                top + layout.getLineBottom(0) + mPaddingV);
-        canvas.drawRoundRect(rect, mCornerRadius, mCornerRadius, mPaint);
-
+        if(getText().length()>0){
+	        final Layout layout = getLayout();
+	        final RectF rect = mRect;
+	        final int left = getCompoundPaddingLeft();
+	        final int top = getExtendedPaddingTop();
+	
+	        rect.set(left + layout.getLineLeft(0) - mPaddingH,
+	                top + layout.getLineTop(0) -  mPaddingV,
+	                Math.min(left + layout.getLineRight(0) + mPaddingH, getScrollX() + getRight() - getLeft()),
+	                top + layout.getLineBottom(0) + mPaddingV);
+	        canvas.drawRoundRect(rect, mCornerRadius, mCornerRadius, mPaint);
+        }
         super.draw(canvas);
-    }
-
-    @Override
-    protected void onAttachedToWindow() {
-        super.onAttachedToWindow();
-        mBackground.setCallback(this);
-    }
-
-    @Override
-    protected void onDetachedFromWindow() {
-        super.onDetachedFromWindow();
-        mBackground.setCallback(null);
     }
 }

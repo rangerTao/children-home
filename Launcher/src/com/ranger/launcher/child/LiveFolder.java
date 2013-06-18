@@ -26,8 +26,11 @@ import android.net.Uri;
 import android.provider.LiveFolders;
 import android.os.AsyncTask;
 import android.database.Cursor;
+import android.graphics.Rect;
 
 import java.lang.ref.WeakReference;
+
+import com.ranger.launcher.child.R;
 
 public class LiveFolder extends Folder {
     private AsyncTask<LiveFolderInfo,Void,Cursor> mLoadingTask;
@@ -58,11 +61,31 @@ public class LiveFolder extends Folder {
                 Uri uri = baseIntent.getData();
                 uri = uri.buildUpon().appendPath(Long.toString(holder.id)).build();
                 intent.setData(uri);
-                mLauncher.startActivitySafely(intent, "(position=" + position + ", id=" + id + ")");
+        		// set bound
+        		if (v != null) {
+        		    Rect targetRect = new Rect();
+        		    v.getGlobalVisibleRect(targetRect);
+        		    try{
+        		    	intent.setSourceBounds(targetRect);
+        		    }catch(NoSuchMethodError e){};
+        		}        
+                mLauncher.startActivitySafely(intent);
+                if (mLauncher.autoCloseFolder) {
+                    mLauncher.closeFolder(this);
+                }
             }
         } else if (holder.intent != null) {
-            mLauncher.startActivitySafely(holder.intent,
-                    "(position=" + position + ", id=" + id + ")");
+    		if (v != null) {
+    		    Rect targetRect = new Rect();
+    		    v.getGlobalVisibleRect(targetRect);
+    		    try{
+    		    	holder.intent.setSourceBounds(targetRect);
+    		    }catch(NoSuchMethodError e){};
+    		}        
+            mLauncher.startActivitySafely(holder.intent);
+            if (mLauncher.autoCloseFolder) {
+                mLauncher.closeFolder(this);
+            }
         }
     }
 

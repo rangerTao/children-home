@@ -27,7 +27,7 @@ class UserFolderInfo extends FolderInfo {
     /**
      * The apps and shortcuts 
      */
-    ArrayList<ShortcutInfo> contents = new ArrayList<ShortcutInfo>();
+    ArrayList<ApplicationInfo> contents = new ArrayList<ApplicationInfo>();
     
     UserFolderInfo() {
         itemType = LauncherSettings.Favorites.ITEM_TYPE_USER_FOLDER;
@@ -38,19 +38,10 @@ class UserFolderInfo extends FolderInfo {
      * 
      * @param item
      */
-    public void add(ShortcutInfo item) {
+    public void add(ApplicationInfo item) {
         contents.add(item);
     }
-    
-    /**
-     * Remove an app or shortcut. Does not change the DB.
-     * 
-     * @param item
-     */
-    public void remove(ShortcutInfo item) {
-        contents.remove(item);
-    }
-    
+
     @Override
     void onAddToDatabase(ContentValues values) { 
         super.onAddToDatabase(values);

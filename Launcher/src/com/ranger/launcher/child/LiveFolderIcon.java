@@ -16,12 +16,14 @@
 
 package com.ranger.launcher.child;
 
+import com.ranger.launcher.child.R;
+
 import android.content.Context;
 import android.content.res.Resources;
 import android.util.AttributeSet;
 import android.view.ViewGroup;
 import android.view.LayoutInflater;
-import android.graphics.Bitmap;
+import android.graphics.drawable.Drawable;
 
 public class LiveFolderIcon extends FolderIcon {
     public LiveFolderIcon(Context context, AttributeSet attrs) {
@@ -39,13 +41,14 @@ public class LiveFolderIcon extends FolderIcon {
                 LayoutInflater.from(launcher).inflate(resId, group, false);
 
         final Resources resources = launcher.getResources();
-        Bitmap b = folderInfo.icon;
-        if (b == null) {
-            b = Utilities.createIconBitmap(resources.getDrawable(R.drawable.ic_launcher_folder),
-                    launcher);
+        Drawable d = folderInfo.icon;
+        if (d == null) {
+            d = Utilities.createIconThumbnail(
+                    resources.getDrawable(R.drawable.ic_launcher_folder), launcher);
+            folderInfo.filtered = true;
         }
-        icon.setCompoundDrawablesWithIntrinsicBounds(null, new FastBitmapDrawable(b), null, null);
-        icon.setText(folderInfo.title);
+        icon.setCompoundDrawablesWithIntrinsicBounds(null, d, null, null);
+        if(!AlmostNexusSettingsHelper.getUIHideLabels(launcher))icon.setText(folderInfo.title);
         icon.setTag(folderInfo);
         icon.setOnClickListener(launcher);
         
@@ -53,28 +56,23 @@ public class LiveFolderIcon extends FolderIcon {
     }
 
     @Override
-    public boolean acceptDrop(DragSource source, int x, int y, int xOffset, int yOffset,
-            DragView dragView, Object dragInfo) {
+    public boolean acceptDrop(DragSource source, int x, int y, int xOffset, int yOffset, Object dragInfo) {
         return false;
     }
 
     @Override
-    public void onDrop(DragSource source, int x, int y, int xOffset, int yOffset,
-            DragView dragView, Object dragInfo) {
+    public void onDrop(DragSource source, int x, int y, int xOffset, int yOffset, Object dragInfo) {
     }
 
     @Override
-    public void onDragEnter(DragSource source, int x, int y, int xOffset, int yOffset,
-            DragView dragView, Object dragInfo) {
+    public void onDragEnter(DragSource source, int x, int y, int xOffset, int yOffset, Object dragInfo) {
     }
 
     @Override
-    public void onDragOver(DragSource source, int x, int y, int xOffset, int yOffset,
-            DragView dragView, Object dragInfo) {
+    public void onDragOver(DragSource source, int x, int y, int xOffset, int yOffset, Object dragInfo) {
     }
 
     @Override
-    public void onDragExit(DragSource source, int x, int y, int xOffset, int yOffset,
-            DragView dragView, Object dragInfo) {
+    public void onDragExit(DragSource source, int x, int y, int xOffset, int yOffset, Object dragInfo) {
     }
 }

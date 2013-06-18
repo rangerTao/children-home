@@ -16,9 +16,16 @@
 
 package com.ranger.launcher.child;
 
+import com.ranger.launcher.child.R;
+
 import android.content.Context;
+import android.content.pm.PackageManager;
+import android.content.pm.PackageManager.NameNotFoundException;
+import android.content.res.Resources;
 import android.graphics.Rect;
+import android.graphics.Typeface;
 import android.util.AttributeSet;
+import android.util.Log;
 import android.view.View;
 import android.view.View.OnClickListener;
 import android.widget.AdapterView;
@@ -36,7 +43,7 @@ public class Folder extends LinearLayout implements DragSource, OnItemLongClickL
         OnItemClickListener, OnClickListener, View.OnLongClickListener {
 
     protected AbsListView mContent;
-    protected DragController mDragController;
+    protected DragController mDragger;
     
     protected Launcher mLauncher;
 
@@ -47,7 +54,12 @@ public class Folder extends LinearLayout implements DragSource, OnItemLongClickL
     /**
      * Which item is being dragged
      */
-    protected ShortcutInfo mDragItem;
+    protected ApplicationInfo mDragItem;
+    /**
+     * ADW:Theme vars
+     */
+    private int mTextColor=0;
+    private boolean useThemeTextColor=false;
 
     /**
      * Used to inflate the Workspace from XML.
@@ -71,15 +83,56 @@ public class Folder extends LinearLayout implements DragSource, OnItemLongClickL
         mCloseButton = (Button) findViewById(R.id.folder_close);
         mCloseButton.setOnClickListener(this);
         mCloseButton.setOnLongClickListener(this);
+    	//ADW: Load the specified theme
+    	String themePackage=AlmostNexusSettingsHelper.getThemePackageName(getContext(), Launcher.THEME_DEFAULT);
+    	PackageManager pm=getContext().getPackageManager();
+    	Resources themeResources=null;
+    	if(!themePackage.equals(Launcher.THEME_DEFAULT)){
+	    	try {
+				themeResources=pm.getResourcesForApplication(themePackage);
+			} catch (NameNotFoundException e) {
+				// TODO Auto-generated catch block
+				//e.printStackTrace();
+			}
+    	}
+		if(themeResources!=null){
+			//Action Buttons
+			Launcher.loadThemeResource(themeResources,themePackage,"box_launcher_top",mCloseButton,Launcher.THEME_ITEM_BACKGROUND);
+			Launcher.loadThemeResource(themeResources,themePackage,"box_launcher_bottom",mContent,Launcher.THEME_ITEM_BACKGROUND);
+			int grid_selector_id=themeResources.getIdentifier("grid_selector", "drawable", themePackage);
+			if(grid_selector_id!=0){
+				mContent.setSelector(themeResources.getDrawable(grid_selector_id));
+			}
+			int textColorId=themeResources.getIdentifier("folder_title_color", "color", themePackage);
+			if(textColorId!=0){
+				mTextColor=themeResources.getColor(textColorId);
+				mCloseButton.setTextColor(mTextColor);
+			}
+			Typeface themeFont=null;
+			try{
+				themeFont=Typeface.createFromAsset(themeResources.getAssets(), "themefont.ttf");
+			}catch (RuntimeException e) {
+				// TODO: handle exception
+			}
+			if(themeFont!=null)mCloseButton.setTypeface(themeFont);
+		}
+        
     }
     
     public void onItemClick(AdapterView parent, View v, int position, long id) {
-        ShortcutInfo app = (ShortcutInfo) parent.getItemAtPosition(position);
-        int[] pos = new int[2];
-        v.getLocationOnScreen(pos);
-        app.intent.setSourceBounds(new Rect(pos[0], pos[1],
-                pos[0] + v.getWidth(), pos[1] + v.getHeight()));
-        mLauncher.startActivitySafely(app.intent, app);
+        ApplicationInfo app = (ApplicationInfo) parent.getItemAtPosition(position);
+		// set bound
+		if (v != null) {
+		    Rect targetRect = new Rect();
+		    v.getGlobalVisibleRect(targetRect);
+		    try{
+		    	app.intent.setSourceBounds(targetRect);
+		    }catch(NoSuchMethodError e){};
+		}        
+        mLauncher.startActivitySafely(app.intent);
+        if (mLauncher.autoCloseFolder) {
+            mLauncher.closeFolder(this);
+        }
     }
 
     public void onClick(View v) {
@@ -97,17 +150,17 @@ public class Folder extends LinearLayout implements DragSource, OnItemLongClickL
             return false;
         }
 
-        ShortcutInfo app = (ShortcutInfo) parent.getItemAtPosition(position);
+        ApplicationInfo app = (ApplicationInfo) parent.getItemAtPosition(position);
 
-        mDragController.startDrag(view, this, app, DragController.DRAG_ACTION_COPY);
+        mDragger.startDrag(view, this, app, DragController.DRAG_ACTION_COPY);
         mLauncher.closeFolder(this);
         mDragItem = app;
 
         return true;
     }
 
-    public void setDragController(DragController dragController) {
-        mDragController = dragController;
+    public void setDragger(DragController dragger) {
+        mDragger = dragger;
     }
 
     public void onDropCompleted(View target, boolean success) {
@@ -115,7 +168,7 @@ public class Folder extends LinearLayout implements DragSource, OnItemLongClickL
 
     /**
      * Sets the adapter used to populate the content area. The adapter must only
-     * contains ShortcutInfo items.
+     * contains ApplicationInfo items.
      *
      * @param adapter The list of applications to display in the folder.
      */

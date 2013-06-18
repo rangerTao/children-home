@@ -17,13 +17,14 @@
 
 package com.ranger.launcher.child;
 
+import com.ranger.launcher.child.R;
+
 import android.widget.ImageView;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.util.AttributeSet;
-import android.view.MotionEvent;
-import android.view.KeyEvent;
 import android.view.View;
+import android.view.KeyEvent;
 
 public class HandleView extends ImageView {
     private static final int ORIENTATION_HORIZONTAL = 1;
@@ -45,8 +46,6 @@ public class HandleView extends ImageView {
         TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.HandleView, defStyle, 0);
         mOrientation = a.getInt(R.styleable.HandleView_direction, ORIENTATION_HORIZONTAL);
         a.recycle();
-
-        setContentDescription(context.getString(R.string.all_apps_button_label));
     }
 
     @Override
@@ -62,11 +61,25 @@ public class HandleView extends ImageView {
     }
 
     @Override
-    public boolean onTouchEvent(MotionEvent ev) {
-        if (ev.getAction() == MotionEvent.ACTION_DOWN && mLauncher.isAllAppsVisible()) {
-            return false;
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        final boolean handled = super.onKeyDown(keyCode, event);
+
+        if (!handled && mLauncher.isAllAppsVisible() && !isDirectionKey(keyCode)) {
+            return mLauncher.getApplicationsGrid().onKeyDown(keyCode, event);
         }
-        return super.onTouchEvent(ev);
+
+        return handled;
+    }
+
+    @Override
+    public boolean onKeyUp(int keyCode, KeyEvent event) {
+        final boolean handled = super.onKeyUp(keyCode, event);
+
+        if (!handled && mLauncher.isAllAppsVisible() && !isDirectionKey(keyCode)) {
+            return mLauncher.getApplicationsGrid().onKeyUp(keyCode, event);
+        }
+
+        return handled;
     }
 
     private static boolean isDirectionKey(int keyCode) {

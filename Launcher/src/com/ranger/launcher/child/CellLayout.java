@@ -16,23 +16,28 @@
 
 package com.ranger.launcher.child;
 
+import android.app.WallpaperManager;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.content.res.Resources;
+import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.RectF;
-import android.graphics.Canvas;
 import android.util.AttributeSet;
 import android.view.ContextMenu;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewDebug;
 import android.view.ViewGroup;
-import android.app.WallpaperManager;
 
 import java.util.ArrayList;
 
-public class CellLayout extends ViewGroup {
+import com.ranger.launcher.child.R;
+
+import mobi.intuitit.android.widget.WidgetCellLayout;
+
+public class CellLayout extends WidgetCellLayout {
     private boolean mPortrait;
 
     private int mCellWidth;
@@ -40,9 +45,11 @@ public class CellLayout extends ViewGroup {
     
     private int mLongAxisStartPadding;
     private int mLongAxisEndPadding;
-
+    private int mLongAxisStartPaddingOrg;
+    
     private int mShortAxisStartPadding;
     private int mShortAxisEndPadding;
+    private int mShortAxisStartPaddingOrg;
 
     private int mShortAxisCells;
     private int mLongAxisCells;
@@ -54,6 +61,7 @@ public class CellLayout extends ViewGroup {
     private final CellInfo mCellInfo = new CellInfo();
     
     int[] mCellXY = new int[2];
+    
     boolean[][] mOccupied;
 
     private RectF mDragRect = new RectF();
@@ -61,8 +69,12 @@ public class CellLayout extends ViewGroup {
     private boolean mDirtyTag;
     private boolean mLastDownOnOccupiedCell = false;
     
-    private final WallpaperManager mWallpaperManager;     
-
+    private final WallpaperManager mWallpaperManager;
+    //ADW: We'll have fixed rows/columns
+	private int mRows;
+	private int mColumns;
+	private int mPaginatorPadding;
+	private int mDesktopCacheType=AlmostNexusSettingsHelper.CACHE_LOW;
     public CellLayout(Context context) {
         this(context, null);
     }
@@ -86,28 +98,28 @@ public class CellLayout extends ViewGroup {
             a.getDimensionPixelSize(R.styleable.CellLayout_shortAxisStartPadding, 10);
         mShortAxisEndPadding = 
             a.getDimensionPixelSize(R.styleable.CellLayout_shortAxisEndPadding, 10);
-        
-        mShortAxisCells = a.getInt(R.styleable.CellLayout_shortAxisCells, 4);
-        mLongAxisCells = a.getInt(R.styleable.CellLayout_longAxisCells, 4);
+        mRows=AlmostNexusSettingsHelper.getDesktopRows(context);
+        mColumns=AlmostNexusSettingsHelper.getDesktopColumns(context);
+        mLongAxisStartPaddingOrg=mLongAxisStartPadding;
+        mShortAxisStartPaddingOrg=mShortAxisStartPadding;
+        mPaginatorPadding=getResources().getDimensionPixelSize(R.dimen.desktop_paginator_padding);
+        //mShortAxisCells = a.getInt(R.styleable.CellLayout_shortAxisCells, 4);
+        //mLongAxisCells = a.getInt(R.styleable.CellLayout_longAxisCells, 4);
 
         a.recycle();
 
         setAlwaysDrawnWithCacheEnabled(false);
 
-        if (mOccupied == null) {
+        /*if (mOccupied == null) {
             if (mPortrait) {
                 mOccupied = new boolean[mShortAxisCells][mLongAxisCells];
             } else {
                 mOccupied = new boolean[mLongAxisCells][mShortAxisCells];
             }
-        }
+        }*/
         
         mWallpaperManager = WallpaperManager.getInstance(getContext());
-    }
-
-    @Override
-    public void dispatchDraw(Canvas canvas) {
-        super.dispatchDraw(canvas);
+        mDesktopCacheType=AlmostNexusSettingsHelper.getScreenCache(context);
     }
 
     @Override
@@ -129,7 +141,35 @@ public class CellLayout extends ViewGroup {
     int getCountY() {
         return mPortrait ? mLongAxisCells : mShortAxisCells;
     }
+    //ADW: public getters to use when creating previews
+    int getCellWidth() {
+        return mCellWidth;
+    }
 
+    int getCellHeight() {
+        return mCellHeight;
+    }
+
+    int getLeftPadding() {
+        return mPortrait ? mShortAxisStartPadding : mLongAxisStartPadding;
+    }
+
+    int getTopPadding() {
+        return mPortrait ? mLongAxisStartPadding : mShortAxisStartPadding;        
+    }
+
+    int getRightPadding() {
+        return mPortrait ? mShortAxisEndPadding : mLongAxisEndPadding;
+    }
+
+    int getBottomPadding() {
+        return mPortrait ? mLongAxisEndPadding : mShortAxisEndPadding;        
+    }
+    //ADW: make dispatchDraw available to Launcher for creating previews
+    @Override
+    protected void dispatchDraw(Canvas canvas) {
+        super.dispatchDraw(canvas);
+    }    
     @Override
     public void addView(View child, int index, ViewGroup.LayoutParams params) {
         // Generate an id for each view, this assumes we have at most 256x256 cells
@@ -187,7 +227,7 @@ public class CellLayout extends ViewGroup {
                     }
                 }
             }
-            
+
             mLastDownOnOccupiedCell = found;
 
             if (!found) {
@@ -257,21 +297,24 @@ public class CellLayout extends ViewGroup {
         cellInfo.maxVacantSpanY = Integer.MIN_VALUE;
         cellInfo.maxVacantSpanYSpanX = Integer.MIN_VALUE;
         cellInfo.clearVacantCells();
-
-        if (occupied[x][y]) {
-            return;
+        //ADW: i can't access current desktop rows/columns, so i try to catch the
+        //possible exception dirty way :-(
+        try{
+	        if (occupied[x][y]) {
+	            return;
+	        }
+        }catch(IndexOutOfBoundsException e){
+        	return;
         }
 
         cellInfo.current.set(x, y, x, y);
-
         findVacantCell(cellInfo.current, xCount, yCount, occupied, cellInfo);
     }
 
-    private static void findVacantCell(Rect current, int xCount, int yCount, boolean[][] occupied,
+    /*private static void findVacantCell(Rect current, int xCount, int yCount, boolean[][] occupied,
             CellInfo cellInfo) {
 
         addVacantCell(current, cellInfo);
-
         if (current.left > 0) {
             if (isColumnEmpty(current.left - 1, current.top, current.bottom, occupied)) {
                 current.left--;
@@ -303,8 +346,44 @@ public class CellLayout extends ViewGroup {
                 current.bottom--;
             }
         }
-    }
+    }*/
+    //TODO: ADW.
+    /**
+     * I don't understand at all why the "findVacantCell" recursive method
+     * do what it does, but seems there's something wrong with it
+     * actually works cause default launchers use a 4x4 grid, but as soon as we rise
+     * it to 6x6 or 7x7 (please, think on tablets!!!!) it starts to ANR and act weird
+     * 
+     * Tried a lot of things, and @unekual sent me the following non-recursive piece of code
+     * This does not find ALL the possible vacant cell combinations, but it works right fine
+     * and does not stuck on a stupid ANR.
+     */
 
+    private static void findVacantCell(Rect current, int xCount, int yCount, boolean[][] occupied,
+    		 CellInfo cellInfo) {
+    		   for (int l = 0; l < xCount; l++)
+    		      for (int r = l; r < xCount; r++)
+    		         for (int t = 0; t < yCount; t++)
+    		            for (int b = t; b < yCount && isRowEmpty(b, l, r, occupied); b++) {
+    		               current.left = l;
+    		               current.right = r;
+    		               current.top = t;
+    		               current.bottom = b;
+
+    		               addVacantCell(current, cellInfo);
+    		            }
+    		}
+
+    		// Note the row test in the last for loop. No need to test the whole area, only the
+    		// newly added row since everything before it would have already been tested.
+
+	 public static boolean isEmpty(int x0, int x1, int y0, int y1, boolean[][] occupied) {
+	    for ( int x = x0; x <= x1; x++ )
+	       for ( int y = y0; y <= y1; y++ )
+	          if ( occupied[x][y] )
+	             return false;
+	    return true;
+	 }
     private static void addVacantCell(Rect current, CellInfo cellInfo) {
         CellInfo.VacantCell cell = CellInfo.VacantCell.acquire();
         cell.cellX = current.left;
@@ -357,6 +436,15 @@ public class CellLayout extends ViewGroup {
             findOccupiedCells(xCount, yCount, occupied, ignoreView);
         }
 
+        return findAllVacantCellsFromOccupied(occupied, xCount, yCount);
+    }
+
+    /**
+     * Variant of findAllVacantCells that uses LauncerModel as its source rather than the 
+     * views.
+     */
+    CellInfo findAllVacantCellsFromOccupied(boolean[][] occupied,
+            final int xCount, final int yCount) {
         CellInfo cellInfo = new CellInfo();
 
         cellInfo.cellX = -1;
@@ -371,7 +459,7 @@ public class CellLayout extends ViewGroup {
 
         Rect current = cellInfo.current;
 
-        for (int x = 0; x < xCount; x++) {
+        /*for (int x = 0; x < xCount; x++) {
             for (int y = 0; y < yCount; y++) {
                 if (!occupied[x][y]) {
                     current.set(x, y, x, y);
@@ -379,8 +467,13 @@ public class CellLayout extends ViewGroup {
                     occupied[x][y] = true;
                 }
             }
-        }
-
+        }*/
+        //ADW: Warning, commented code.
+        //Why s it calling a recursive/loop method from within another loop!!!!????
+        //Every time you longpress an item it does the findVacantCell zillions of times
+        //eating a lot of cpu/ram!!!!!
+        //Just calling this, seems to work, but i'd need further testing.... volunteers?
+        findVacantCell(current, xCount, yCount, occupied, cellInfo);
         cellInfo.valid = cellInfo.vacantCells.size() > 0;
 
         // Assume the caller will perform their own cell searching, otherwise we
@@ -414,16 +507,6 @@ public class CellLayout extends ViewGroup {
     }
     
     /**
-     * Given a point, return the cell that most closely encloses that point
-     * @param x X coordinate of the point
-     * @param y Y coordinate of the point
-     * @param result Array of 2 ints to hold the x and y coordinate of the cell
-     */
-    void pointToCellRounded(int x, int y, int[] result) {
-        pointToCellExact(x + (mCellWidth / 2), y + (mCellHeight / 2), result);
-    }
-
-    /**
      * Given a cell coordinate, return the point that represents the upper left corner of that cell
      * 
      * @param cellX X coordinate of the cell 
@@ -442,30 +525,6 @@ public class CellLayout extends ViewGroup {
         result[1] = vStartPadding + cellY * (mCellHeight + mHeightGap);
     }
 
-    int getCellWidth() {
-        return mCellWidth;
-    }
-
-    int getCellHeight() {
-        return mCellHeight;
-    }
-
-    int getLeftPadding() {
-        return mPortrait ? mShortAxisStartPadding : mLongAxisStartPadding;
-    }
-
-    int getTopPadding() {
-        return mPortrait ? mLongAxisStartPadding : mShortAxisStartPadding;        
-    }
-
-    int getRightPadding() {
-        return mPortrait ? mShortAxisEndPadding : mLongAxisEndPadding;
-    }
-
-    int getBottomPadding() {
-        return mPortrait ? mLongAxisEndPadding : mShortAxisEndPadding;        
-    }
-
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         // TODO: currently ignoring padding
@@ -479,7 +538,40 @@ public class CellLayout extends ViewGroup {
         if (widthSpecMode == MeasureSpec.UNSPECIFIED || heightSpecMode == MeasureSpec.UNSPECIFIED) {
             throw new RuntimeException("CellLayout cannot have UNSPECIFIED dimensions");
         }
-
+        mPortrait = heightSpecSize > widthSpecSize;
+        int tmpCellW=mCellWidth;
+        int tmpCellH=mCellHeight;
+        //ADW: add padding if using top paginator dots AND indicator is enabled
+        int topExtra=0;
+        if(AlmostNexusSettingsHelper.getDesktopIndicator(getContext()) && AlmostNexusSettingsHelper.getDesktopIndicatorType(getContext())==DesktopIndicator.INDICATOR_TYPE_PAGER){
+        	topExtra=mPaginatorPadding;
+        }
+        if(mPortrait){
+        	mLongAxisCells=mRows;
+        	mShortAxisCells=mColumns;
+        	mLongAxisStartPadding=mLongAxisStartPaddingOrg+topExtra;
+        	mShortAxisStartPadding=mShortAxisStartPaddingOrg;
+        	tmpCellW=(widthSpecSize-mShortAxisStartPadding-mShortAxisEndPadding)/mColumns;
+        	tmpCellH=(heightSpecSize-mLongAxisStartPadding-mLongAxisEndPadding)/mRows;
+        }else{
+        	mLongAxisCells=mColumns;
+        	mShortAxisCells=mRows;
+        	mShortAxisStartPadding=mShortAxisStartPaddingOrg+topExtra;
+        	mLongAxisStartPadding=mLongAxisStartPaddingOrg;
+        	tmpCellW=(widthSpecSize-mLongAxisStartPadding-mLongAxisEndPadding)/mColumns;
+        	tmpCellH=(heightSpecSize-mShortAxisStartPadding-mShortAxisEndPadding)/mRows;
+        }
+        if(AlmostNexusSettingsHelper.getAutosizeIcons(getContext())){
+        	mCellWidth=tmpCellW;
+        	mCellHeight=tmpCellH;
+        }
+        if (mOccupied == null) {
+            if (mPortrait) {
+                mOccupied = new boolean[mShortAxisCells][mLongAxisCells];
+            } else {
+                mOccupied = new boolean[mLongAxisCells][mShortAxisCells];
+            }
+        }
         final int shortAxisCells = mShortAxisCells;
         final int longAxisCells = mLongAxisCells;
         final int longAxisStartPadding = mLongAxisStartPadding;
@@ -528,10 +620,10 @@ public class CellLayout extends ViewGroup {
 
             if (mPortrait) {
                 lp.setup(cellWidth, cellHeight, mWidthGap, mHeightGap, shortAxisStartPadding,
-                        longAxisStartPadding);
+                        longAxisStartPadding,AlmostNexusSettingsHelper.getAutosizeIcons(getContext()));
             } else {
                 lp.setup(cellWidth, cellHeight, mWidthGap, mHeightGap, longAxisStartPadding,
-                        shortAxisStartPadding);
+                        shortAxisStartPadding,AlmostNexusSettingsHelper.getAutosizeIcons(getContext()));
             }
             
             if (lp.regenerateId) {
@@ -561,7 +653,7 @@ public class CellLayout extends ViewGroup {
                 int childLeft = lp.x;
                 int childTop = lp.y;
                 child.layout(childLeft, childTop, childLeft + lp.width, childTop + lp.height);
-
+                
                 if (lp.dropped) {
                     lp.dropped = false;
 
@@ -577,13 +669,19 @@ public class CellLayout extends ViewGroup {
 
     @Override
     protected void setChildrenDrawingCacheEnabled(boolean enabled) {
-        final int count = getChildCount();
-        for (int i = 0; i < count; i++) {
-            final View view = getChildAt(i);
-            view.setDrawingCacheEnabled(enabled);
-            // Update the drawing caches
-            view.buildDrawingCache(true);
-        }
+    	if(mDesktopCacheType!=AlmostNexusSettingsHelper.CACHE_DISABLED){
+	    	final int count = getChildCount();
+	        for (int i = 0; i < count; i++) {
+	            final View view = getChildAt(i);
+        		if(mDesktopCacheType==AlmostNexusSettingsHelper.CACHE_LOW)
+        			view.setDrawingCacheQuality(View.DRAWING_CACHE_QUALITY_LOW);
+        		else
+        			view.setDrawingCacheQuality(View.DRAWING_CACHE_QUALITY_AUTO);
+	            view.setDrawingCacheEnabled(enabled);
+	            // Update the drawing caches
+	            view.buildDrawingCache(true);
+	        }
+    	}
     }
 
     @Override
@@ -659,7 +757,7 @@ public class CellLayout extends ViewGroup {
             lp.cellX = targetXY[0];
             lp.cellY = targetXY[1];
             lp.isDragging = false;
-            lp.dropped = true;
+            lp.dropped = true;            
             mDragRect.setEmpty();
             child.requestLayout();
             invalidate();
@@ -686,49 +784,6 @@ public class CellLayout extends ViewGroup {
     }
     
     /**
-     * Drag a child over the specified position
-     * 
-     * @param child The child that is being dropped
-     * @param cellX The child's new x cell location
-     * @param cellY The child's new y cell location 
-     */
-    void onDragOverChild(View child, int cellX, int cellY) {
-        int[] cellXY = mCellXY;
-        pointToCellRounded(cellX, cellY, cellXY);
-        LayoutParams lp = (LayoutParams) child.getLayoutParams();
-        cellToRect(cellXY[0], cellXY[1], lp.cellHSpan, lp.cellVSpan, mDragRect);
-        invalidate();
-    }
-    
-    /**
-     * Computes a bounding rectangle for a range of cells
-     *  
-     * @param cellX X coordinate of upper left corner expressed as a cell position
-     * @param cellY Y coordinate of upper left corner expressed as a cell position
-     * @param cellHSpan Width in cells 
-     * @param cellVSpan Height in cells
-     * @param dragRect Rectnagle into which to put the results
-     */
-    public void cellToRect(int cellX, int cellY, int cellHSpan, int cellVSpan, RectF dragRect) {
-        final boolean portrait = mPortrait;
-        final int cellWidth = mCellWidth;
-        final int cellHeight = mCellHeight;
-        final int widthGap = mWidthGap;
-        final int heightGap = mHeightGap;
-        
-        final int hStartPadding = portrait ? mShortAxisStartPadding : mLongAxisStartPadding;
-        final int vStartPadding = portrait ? mLongAxisStartPadding : mShortAxisStartPadding;
-        
-        int width = cellHSpan * cellWidth + ((cellHSpan - 1) * widthGap);
-        int height = cellVSpan * cellHeight + ((cellVSpan - 1) * heightGap);
-
-        int x = hStartPadding + cellX * (cellWidth + widthGap);
-        int y = vStartPadding + cellY * (cellHeight + heightGap);
-        
-        dragRect.set(x, y, x + width, y + height);
-    }
-    
-    /**
      * Computes the required horizontal and vertical cell spans to always 
      * fit the given rectangle.
      *  
@@ -739,8 +794,8 @@ public class CellLayout extends ViewGroup {
         // Always assume we're working with the smallest span to make sure we
         // reserve enough space in both orientations.
         final Resources resources = getResources();
-        int actualWidth = resources.getDimensionPixelSize(R.dimen.workspace_cell_width);
-        int actualHeight = resources.getDimensionPixelSize(R.dimen.workspace_cell_height);
+        int actualWidth = resources.getDimensionPixelSize(R.dimen.cell_width);
+        int actualHeight = resources.getDimensionPixelSize(R.dimen.cell_height);
         int smallerSize = Math.min(actualWidth, actualHeight);
 
         // Always round up to next largest cell
@@ -834,6 +889,10 @@ out:            for (int i = x; i < x + spanX - 1 && x < xCount; i++) {
             }
         }
     }
+    
+    public boolean lastDownOnOccupiedCell() {
+        return mLastDownOnOccupiedCell;
+    }
 
     @Override
     public ViewGroup.LayoutParams generateLayoutParams(AttributeSet attrs) {
@@ -886,10 +945,10 @@ out:            for (int i = x; i < x + spanX - 1 && x < xCount; i++) {
         // Y coordinate of the view in the layout.
         @ViewDebug.ExportedProperty
         int y;
-
+        
         boolean regenerateId;
         
-        boolean dropped;
+        boolean dropped;        
 
         public LayoutParams(Context c, AttributeSet attrs) {
             super(c, attrs);
@@ -904,7 +963,7 @@ out:            for (int i = x; i < x + spanX - 1 && x < xCount; i++) {
         }
         
         public LayoutParams(int cellX, int cellY, int cellHSpan, int cellVSpan) {
-            super(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
+            super(LayoutParams.FILL_PARENT, LayoutParams.FILL_PARENT);
             this.cellX = cellX;
             this.cellY = cellY;
             this.cellHSpan = cellHSpan;
@@ -912,7 +971,7 @@ out:            for (int i = x; i < x + spanX - 1 && x < xCount; i++) {
         }
 
         public void setup(int cellWidth, int cellHeight, int widthGap, int heightGap,
-                int hStartPadding, int vStartPadding) {
+                int hStartPadding, int vStartPadding,boolean autoStretch) {
             
             final int myCellHSpan = cellHSpan;
             final int myCellVSpan = cellVSpan;
@@ -923,7 +982,11 @@ out:            for (int i = x; i < x + spanX - 1 && x < xCount; i++) {
                     leftMargin - rightMargin;
             height = myCellVSpan * cellHeight + ((myCellVSpan - 1) * heightGap) -
                     topMargin - bottomMargin;
-
+            if(autoStretch){
+            	width=(cellWidth*myCellHSpan)- rightMargin-leftMargin;
+            	height=(cellHeight*myCellVSpan);
+            }
+            
             x = hStartPadding + myCellX * (cellWidth + widthGap) + leftMargin;
             y = vStartPadding + myCellY * (cellHeight + heightGap) + topMargin;
         }
@@ -1089,10 +1152,13 @@ out:            for (int i = x; i < x + spanX - 1 && x < xCount; i++) {
                     ", y=" + cellY + "]";
         }
     }
-
-    public boolean lastDownOnOccupiedCell() {
-        return mLastDownOnOccupiedCell;
+    protected void setScreen(int screen) {
+        mCellInfo.screen = screen;
     }
+    protected int getScreen() {
+        return mCellInfo.screen;
+    }
+    
 }
 
 
