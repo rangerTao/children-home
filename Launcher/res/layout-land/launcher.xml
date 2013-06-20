@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Copyright (C) 2007 The Android Open Source Project
+<!--
+     Copyright (C) 2007 The Android Open Source Project
 
      Licensed under the Apache License, Version 2.0 (the "License");
      you may not use this file except in compliance with the License.
@@ -14,136 +15,138 @@
      limitations under the License.
 -->
 
-<com.ranger.launcher.child.DragLayer
-    xmlns:android="http://schemas.android.com/apk/res/android"
+<com.ranger.launcher.child.DragLayer xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:launcher="http://schemas.android.com/apk/res/com.ranger.launcher.child"
-
     android:id="@+id/drag_layer"
     android:layout_width="fill_parent"
-    android:layout_height="fill_parent">
+    android:layout_height="fill_parent" >
 
     <!-- The workspace contains 5 screens of cells -->
+
     <com.ranger.launcher.child.Workspace
         android:id="@+id/workspace"
         android:layout_width="fill_parent"
         android:layout_height="fill_parent"
-
-        launcher:defaultScreen="2">
-
+        launcher:defaultScreen="0" >
     </com.ranger.launcher.child.Workspace>
 
     <ViewStub
         android:id="@+id/stub_drawer"
-        android:inflatedId="@+id/all_apps_view"
         android:layout_width="fill_parent"
         android:layout_height="fill_parent"
-        /> 
+        android:inflatedId="@+id/all_apps_view" />
+
     <LinearLayout
-    	android:id="@+id/drawer_toolbar"
-    	android:orientation="vertical"
-		android:layout_width="wrap_content"
-		android:layout_height="fill_parent"
-		android:gravity="right|center_vertical"
-		android:layout_gravity="right|center_vertical">
-	    <com.ranger.launcher.child.ActionButton
-	        android:src="@drawable/rab_empty"
-	        android:background="@drawable/rab_bg"
-	        android:scaleType="center"
-	        android:layout_width="wrap_content"
-	        android:id="@+id/btn_rab"
-	        launcher:ident="RAB"
-	        android:layout_height="60dip" 
-	        />
-	    <com.ranger.launcher.child.ActionButton
-	        android:src="@drawable/rab_empty"
-	        android:background="@drawable/rab2_bg"
-	        android:scaleType="center"
-	        android:layout_width="wrap_content"
-	        android:id="@+id/btn_rab2"
-	        launcher:ident="RAB2"
-	        android:layout_height="60dip" 
-	        />
-		<ImageView
-			android:id="@+id/appsBg"
-			android:background="@drawable/handle"
-			android:layout_width="wrap_content"
-			android:layout_height="55dip"
-			/>
-	    <com.ranger.launcher.child.ActionButton
-	        android:src="@drawable/lab_empty"
-	        android:background="@drawable/lab2_bg"
-	        android:scaleType="center"
-	        android:layout_width="wrap_content"
-	        android:id="@+id/btn_lab2"
-	        launcher:ident="LAB2"
-	        android:layout_height="60dip" 
-	        />
-	    <com.ranger.launcher.child.ActionButton
-	        android:src="@drawable/lab_empty"
-	        android:background="@drawable/lab_bg"
-	        android:scaleType="center"
-	        android:layout_width="wrap_content"
-	        android:id="@+id/btn_lab"
-	        launcher:ident="LAB"
-	        android:layout_height="60dip" 
-	        />
+        android:id="@+id/drawer_toolbar"
+        android:layout_width="wrap_content"
+        android:layout_height="fill_parent"
+        android:layout_gravity="right|center_vertical"
+        android:gravity="right|center_vertical"
+        android:orientation="vertical"
+        android:visibility="gone" >
+
+        <com.ranger.launcher.child.ActionButton
+            android:id="@+id/btn_rab"
+            android:layout_width="wrap_content"
+            android:layout_height="60dip"
+            android:background="@drawable/rab_bg"
+            android:scaleType="center"
+            android:src="@drawable/rab_empty"
+            launcher:ident="RAB" />
+
+        <com.ranger.launcher.child.ActionButton
+            android:id="@+id/btn_rab2"
+            android:layout_width="wrap_content"
+            android:layout_height="60dip"
+            android:background="@drawable/rab2_bg"
+            android:scaleType="center"
+            android:src="@drawable/rab_empty"
+            launcher:ident="RAB2" />
+
+        <ImageView
+            android:id="@+id/appsBg"
+            android:layout_width="wrap_content"
+            android:layout_height="55dip"
+            android:background="@drawable/handle" />
+
+        <com.ranger.launcher.child.ActionButton
+            android:id="@+id/btn_lab2"
+            android:layout_width="wrap_content"
+            android:layout_height="60dip"
+            android:background="@drawable/lab2_bg"
+            android:scaleType="center"
+            android:src="@drawable/lab_empty"
+            launcher:ident="LAB2" />
+
+        <com.ranger.launcher.child.ActionButton
+            android:id="@+id/btn_lab"
+            android:layout_width="wrap_content"
+            android:layout_height="60dip"
+            android:background="@drawable/lab_bg"
+            android:scaleType="center"
+            android:src="@drawable/lab_empty"
+            launcher:ident="LAB" />
     </LinearLayout>
+
     <ImageView
-    	android:src="@drawable/home_arrows_left"
-        android:layout_height="wrap_content"
         android:id="@+id/btn_scroll_left"
         android:layout_width="wrap_content"
-        android:layout_gravity="bottom|right"
-        android:onClick="previousScreen"/>
-    <ImageView
-    	android:src="@drawable/home_arrows_right"
         android:layout_height="wrap_content"
+        android:layout_gravity="bottom|right"
+        android:onClick="previousScreen"
+        android:src="@drawable/home_arrows_left" />
+
+    <ImageView
         android:id="@+id/btn_scroll_right"
-        android:layout_width="wrap_content" 
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
         android:layout_gravity="top|right"
-        android:onClick="nextScreen"/>
+        android:onClick="nextScreen"
+        android:src="@drawable/home_arrows_right" />
+
     <com.ranger.launcher.child.SliderView
-    	android:src="@drawable/handle_icon"
         android:id="@+id/all_apps"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:nextFocusLeft="@id/all_apps_view"
-        android:focusable="true"
-        android:clickable="true"
-        android:scaleType="center"
         android:layout_gravity="right|center_vertical"
+        android:clickable="true"
+        android:focusable="true"
+        android:nextFocusLeft="@id/all_apps_view"
+        android:scaleType="center"
+        android:src="@drawable/handle_icon"
         launcher:slideDirections="left"
         launcher:targetDistance="45dip" />
 
     <com.ranger.launcher.child.DeleteZone
-    	android:src="@drawable/ic_delete"
-    	android:background="@drawable/delete_zone_selector"
         android:id="@+id/delete_zone"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:scaleType="center"
         android:layout_gravity="right|center_vertical"
+        android:background="@drawable/delete_zone_selector"
+        android:scaleType="center"
+        android:src="@drawable/ic_delete"
         android:visibility="invisible"
         launcher:direction="vertical" />
+
     <com.ranger.launcher.child.DockBar
         android:id="@+id/dockbar"
         android:layout_width="wrap_content"
         android:layout_height="fill_parent"
-        android:orientation="horizontal"
         android:layout_gravity="center_vertical|right"
-        launcher:position="right"
-        >
+        android:orientation="horizontal"
+        android:visibility="gone"
+        launcher:position="right" >
+
         <com.ranger.launcher.child.MiniLauncher
-        	android:background="@drawable/dockbar_bg"
             android:id="@+id/mini_content"
             android:layout_width="fill_parent"
             android:layout_height="fill_parent"
-            launcher:cellWidth="65dip"
+            android:background="@drawable/dockbar_bg"
+            android:padding="0dip"
             launcher:cellHeight="48dip"
+            launcher:cellWidth="65dip"
             launcher:cells="6"
-            launcher:orientation="vertical"
-            android:padding="0dip"		
-            />
+            launcher:orientation="vertical" />
     </com.ranger.launcher.child.DockBar>
 
 </com.ranger.launcher.child.DragLayer>

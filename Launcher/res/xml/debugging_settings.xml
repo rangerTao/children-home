@@ -6,6 +6,6 @@
 		android:title="DEBUGGING-FOO">
 		<CheckBoxPreference android:key="dbg_show_mem"
 			android:title="show memory usage" 
-			android:defaultValue="False"/>
+			android:defaultValue="true"/>
 	</PreferenceScreen>
 </PreferenceScreen>
