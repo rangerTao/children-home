@@ -355,6 +355,7 @@ public final class Launcher extends Activity implements View.OnClickListener, On
 			changeOrientation(AlmostNexusSettingsHelper.getDesktopOrientation(this), false);
 		}
 		super.onCreate(savedInstanceState);
+		
 		mInflater = getLayoutInflater();
 
 		AppCatalogueFilters.getInstance().init(this);
@@ -1431,24 +1432,24 @@ public final class Launcher extends Activity implements View.OnClickListener, On
 			return false;
 
 		super.onCreateOptionsMenu(menu);
-		menu.add(MENU_GROUP_ADD, MENU_ADD, 0, R.string.menu_add).setIcon(android.R.drawable.ic_menu_add).setAlphabeticShortcut('A');
-		menu.add(MENU_GROUP_NORMAL, MENU_WALLPAPER_SETTINGS, 0, R.string.menu_wallpaper).setIcon(android.R.drawable.ic_menu_gallery).setAlphabeticShortcut('W');
-		menu.add(MENU_GROUP_NORMAL, MENU_SEARCH, 0, R.string.menu_search).setIcon(android.R.drawable.ic_search_category_default).setAlphabeticShortcut(SearchManager.MENU_KEY);
-		menu.add(MENU_GROUP_NORMAL, MENU_NOTIFICATIONS, 0, R.string.menu_edit).setIcon(android.R.drawable.ic_menu_edit).setAlphabeticShortcut('E');
+//		menu.add(MENU_GROUP_ADD, MENU_ADD, 0, R.string.menu_add).setIcon(android.R.drawable.ic_menu_add).setAlphabeticShortcut('A');
+//		menu.add(MENU_GROUP_NORMAL, MENU_WALLPAPER_SETTINGS, 0, R.string.menu_wallpaper).setIcon(android.R.drawable.ic_menu_gallery).setAlphabeticShortcut('W');
+//		menu.add(MENU_GROUP_NORMAL, MENU_SEARCH, 0, R.string.menu_search).setIcon(android.R.drawable.ic_search_category_default).setAlphabeticShortcut(SearchManager.MENU_KEY);
+//		menu.add(MENU_GROUP_NORMAL, MENU_NOTIFICATIONS, 0, R.string.menu_edit).setIcon(android.R.drawable.ic_menu_edit).setAlphabeticShortcut('E');
 
-		final Intent settings = new Intent(android.provider.Settings.ACTION_SETTINGS);
+	 	final Intent settings = new Intent(android.provider.Settings.ACTION_SETTINGS);
 		settings.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
 
-		menu.add(MENU_GROUP_NORMAL, MENU_SETTINGS, 0, R.string.menu_settings).setIcon(android.R.drawable.ic_menu_preferences).setAlphabeticShortcut('P').setIntent(settings);
+//		menu.add(MENU_GROUP_NORMAL, MENU_SETTINGS, 0, R.string.menu_settings).setIcon(android.R.drawable.ic_menu_preferences).setAlphabeticShortcut('P').setIntent(settings);
 		// ADW: add custom settings
 		menu.add(MENU_GROUP_ALMOSTNEXUS, MENU_ALMOSTNEXUS, 0, R.string.menu_adw_settings).setIcon(com.android.internal.R.drawable.ic_menu_preferences).setAlphabeticShortcut('X');
 
-		menu.add(MENU_GROUP_CATALOGUE, MENU_APP_GRP_CONFIG, 0, R.string.AppGroupConfig).setIcon(android.R.drawable.ic_menu_agenda);
+//		menu.add(MENU_GROUP_CATALOGUE, MENU_APP_GRP_CONFIG, 0, R.string.AppGroupConfig).setIcon(android.R.drawable.ic_menu_agenda);
 		// menu.add(MENU_GROUP_CATALOGUE, MENU_APP_GRP_RENAME, 0,
 		// R.string.AppGroupRename)
 		// .setIcon(R.drawable.ic_menu_notifications);
-		menu.add(MENU_GROUP_CATALOGUE, MENU_APP_SWITCH_GRP, 0, R.string.AppGroupChoose).setIcon(android.R.drawable.ic_menu_manage);
-		menu.add(MENU_GROUP_CATALOGUE, MENU_APP_DELETE_GRP, 0, R.string.AppGroupDel).setIcon(android.R.drawable.ic_menu_delete);
+//		menu.add(MENU_GROUP_CATALOGUE, MENU_APP_SWITCH_GRP, 0, R.string.AppGroupChoose).setIcon(android.R.drawable.ic_menu_manage);
+//		menu.add(MENU_GROUP_CATALOGUE, MENU_APP_DELETE_GRP, 0, R.string.AppGroupDel).setIcon(android.R.drawable.ic_menu_delete);
 		return true;
 	}
 
@@ -3083,7 +3084,8 @@ public final class Launcher extends Activity implements View.OnClickListener, On
 			mDockBar.close();
 		}
 		mHandleView.setSlidingEnabled(showDockBar);
-		fullScreen(hideStatusBar);
+//		fullScreen(hideStatusBar);
+		fullScreen(true);
 		if (!mDockBar.isOpen() && !showingPreviews) {
 			if (!isAllAppsVisible()) {
 				mNextView.setVisibility(showDots ? View.VISIBLE : View.GONE);
@@ -3960,6 +3962,7 @@ public final class Launcher extends Activity implements View.OnClickListener, On
 		// TODO Auto-generated method stub
 		// if(mMessWithPersistence)setPersistent(false);
 		super.onStart();
+		
 		// int currentOrientation=getResources().getConfiguration().orientation;
 		// if(currentOrientation!=savedOrientation){
 		// mShouldRestart=true;
