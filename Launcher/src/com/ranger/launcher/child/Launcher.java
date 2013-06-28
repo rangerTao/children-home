@@ -27,6 +27,7 @@ import com.ranger.launcher.child.catalogue.AppCatalogueFilter;
 import com.ranger.launcher.child.catalogue.AppCatalogueFilters;
 import com.ranger.launcher.child.catalogue.AppGroupAdapter;
 import com.ranger.launcher.child.catalogue.AppInfoMList;
+import com.ranger.launcher.child.utils.Constants;
 
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
@@ -729,6 +730,13 @@ public final class Launcher extends Activity implements View.OnClickListener, On
 		} else {
 			tmp.setLayoutResource(R.layout.old_drawer);
 		}
+
+		if (!Constants.isParent) {
+			tmp.setVisibility(View.GONE);
+		} else {
+			tmp.setVisibility(View.VISIBLE);
+		}
+
 		mAllAppsGrid = (Drawer) tmp.inflate();
 		final DeleteZone deleteZone = (DeleteZone) dragLayer.findViewById(R.id.delete_zone);
 
@@ -1357,6 +1365,9 @@ public final class Launcher extends Activity implements View.OnClickListener, On
 			closeDrawer(false);
 		if (requestCode >= 0)
 			mWaitingForResult = true;
+
+		intent.setFlags(Intent.FLAG_ACTIVITY_NO_HISTORY);
+
 		super.startActivityForResult(intent, requestCode);
 	}
 
@@ -1432,15 +1443,17 @@ public final class Launcher extends Activity implements View.OnClickListener, On
 			return false;
 
 		super.onCreateOptionsMenu(menu);
-//		menu.add(MENU_GROUP_ADD, MENU_ADD, 0, R.string.menu_add).setIcon(android.R.drawable.ic_menu_add).setAlphabeticShortcut('A');
-//		menu.add(MENU_GROUP_NORMAL, MENU_WALLPAPER_SETTINGS, 0, R.string.menu_wallpaper).setIcon(android.R.drawable.ic_menu_gallery).setAlphabeticShortcut('W');
-//		menu.add(MENU_GROUP_NORMAL, MENU_SEARCH, 0, R.string.menu_search).setIcon(android.R.drawable.ic_search_category_default).setAlphabeticShortcut(SearchManager.MENU_KEY);
-//		menu.add(MENU_GROUP_NORMAL, MENU_NOTIFICATIONS, 0, R.string.menu_edit).setIcon(android.R.drawable.ic_menu_edit).setAlphabeticShortcut('E');
 
-	 	final Intent settings = new Intent(android.provider.Settings.ACTION_SETTINGS);
-		settings.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+		if (Constants.isParent) {
+			menu.add(MENU_GROUP_ADD, MENU_ADD, 0, R.string.menu_add).setIcon(android.R.drawable.ic_menu_add).setAlphabeticShortcut('A');
+			menu.add(MENU_GROUP_NORMAL, MENU_WALLPAPER_SETTINGS, 0, R.string.menu_wallpaper).setIcon(android.R.drawable.ic_menu_gallery).setAlphabeticShortcut('W');
+			menu.add(MENU_GROUP_NORMAL, MENU_SEARCH, 0, R.string.menu_search).setIcon(android.R.drawable.ic_search_category_default).setAlphabeticShortcut(SearchManager.MENU_KEY);
+			menu.add(MENU_GROUP_NORMAL, MENU_NOTIFICATIONS, 0, R.string.menu_edit).setIcon(android.R.drawable.ic_menu_edit).setAlphabeticShortcut('E');
+			final Intent settings = new Intent(android.provider.Settings.ACTION_SETTINGS);
+			settings.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+			menu.add(MENU_GROUP_NORMAL, MENU_SETTINGS, 0, R.string.menu_settings).setIcon(android.R.drawable.ic_menu_preferences).setAlphabeticShortcut('P').setIntent(settings);
+		}
 
-//		menu.add(MENU_GROUP_NORMAL, MENU_SETTINGS, 0, R.string.menu_settings).setIcon(android.R.drawable.ic_menu_preferences).setAlphabeticShortcut('P').setIntent(settings);
 		// ADW: add custom settings
 		menu.add(MENU_GROUP_ALMOSTNEXUS, MENU_ALMOSTNEXUS, 0, R.string.menu_adw_settings).setIcon(com.android.internal.R.drawable.ic_menu_preferences).setAlphabeticShortcut('X');
 
@@ -1820,8 +1833,11 @@ public final class Launcher extends Activity implements View.OnClickListener, On
 
 	private void showNotifications() {
 		if (hideStatusBar) {
-//			fullScreen(false);
-			fullScreen(true);
+
+			if (Constants.isParent)
+				fullScreen(false);
+			else
+				fullScreen(true);
 			mShouldHideStatusbaronFocus = true;
 		}
 		try {
@@ -3399,10 +3415,13 @@ public final class Launcher extends Activity implements View.OnClickListener, On
 
 	public void showPreviews(final View anchor, int start, int end) {
 		if (newPreviews) {
-//			showingPreviews = true;
-//			hideDesktop(true);
-//			mWorkspace.lock();
-//			mWorkspace.openSense(true);
+			if (Constants.isParent) {
+				showingPreviews = true;
+				hideDesktop(true);
+				mWorkspace.lock();
+				mWorkspace.openSense(true);
+			}
+
 		} else {
 			// check first if it's already open
 			final PopupWindow window = (PopupWindow) anchor.getTag();
@@ -3810,8 +3829,10 @@ public final class Launcher extends Activity implements View.OnClickListener, On
 			WindowManager.LayoutParams attrs = getWindow().getAttributes();
 			if ((attrs.flags & WindowManager.LayoutParams.FLAG_FULLSCREEN) == WindowManager.LayoutParams.FLAG_FULLSCREEN) {
 				// go non-full screen
-//				fullScreen(false);
-				fullScreen(true);
+				if (Constants.isParent)
+					fullScreen(false);
+				else
+					fullScreen(true);
 			} else {
 				// go full screen
 				fullScreen(true);
@@ -3819,16 +3840,20 @@ public final class Launcher extends Activity implements View.OnClickListener, On
 			break;
 		case BIND_NOTIFICATIONS:
 			dismissPreviews();
-//			showNotifications();
+			if (!Constants.isParent)
+				break;
+			showNotifications();
 			break;
 		case BIND_HOME_NOTIFICATIONS:
-//			if (!mWorkspace.isDefaultScreenShowing()) {
-//				dismissPreviews();
-//				mWorkspace.moveToDefaultScreen();
-//			} else {
-//				dismissPreviews();
-//				showNotifications();
-//			}
+			if (!Constants.isParent)
+				break;
+			if (!mWorkspace.isDefaultScreenShowing()) {
+				dismissPreviews();
+				mWorkspace.moveToDefaultScreen();
+			} else {
+				dismissPreviews();
+				showNotifications();
+			}
 			break;
 		case BIND_DOCKBAR:
 			dismissPreviews();
