@@ -40,9 +40,9 @@
         android:id="@+id/drawer_toolbar"
         android:layout_width="wrap_content"
         android:layout_height="fill_parent"
-        android:layout_gravity="right|center_vertical"
-        android:gravity="right|center_vertical"
-        android:orientation="vertical"
+        android:layout_gravity="bottom|center_horizontal"
+        android:gravity="bottom|center_horizontal"
+        android:orientation="horizontal"
         android:visibility="gone" >
 
         <com.ranger.launcher.child.ActionButton
@@ -92,7 +92,7 @@
         android:id="@+id/btn_scroll_left"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_gravity="bottom|right"
+        android:layout_gravity="right|bottom"
         android:onClick="previousScreen"
         android:src="@drawable/home_arrows_left" />
 
@@ -100,7 +100,7 @@
         android:id="@+id/btn_scroll_right"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_gravity="top|right"
+        android:layout_gravity="left|bottom"
         android:onClick="nextScreen"
         android:src="@drawable/home_arrows_right" />
 
@@ -114,6 +114,7 @@
         android:nextFocusLeft="@id/all_apps_view"
         android:scaleType="center"
         android:src="@drawable/handle_icon"
+	android:visibility="gone"
         launcher:slideDirections="left"
         launcher:targetDistance="45dip" />
 
