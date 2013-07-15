@@ -78,57 +78,14 @@ public class MyLauncherSettings extends PreferenceActivity implements OnPreferen
         super.onCreate(savedInstanceState);
         getPreferenceManager().setSharedPreferencesName(ALMOSTNEXUS_PREFERENCES);
         addPreferencesFromResource(R.xml.launcher_settings);
-        CheckBoxPreference uiDots= (CheckBoxPreference) findPreference("uiDots");
-        uiDots.setOnPreferenceChangeListener(this);
-        if(uiDots.isChecked()){
-            CheckBoxPreference uiAB2= (CheckBoxPreference) findPreference("uiAB2");
-        	uiAB2.setEnabled(false);
-        }
-        DialogSeekBarPreference columnsDesktop= (DialogSeekBarPreference) findPreference("desktopColumns");
-        columnsDesktop.setMin(3);
-        DialogSeekBarPreference rowsDesktop= (DialogSeekBarPreference) findPreference("desktopRows");
-        rowsDesktop.setMin(3);
         DialogSeekBarPreference defaultScreen= (DialogSeekBarPreference) findPreference("defaultScreen");
         defaultScreen.setMin(1);
         defaultScreen.setMax(AlmostNexusSettingsHelper.getDesktopScreens(this)-1);
-        DialogSeekBarPreference columnsPortrait= (DialogSeekBarPreference) findPreference("drawerColumnsPortrait");
-        columnsPortrait.setMin(1);
-        DialogSeekBarPreference rowsPortrait= (DialogSeekBarPreference) findPreference("drawerRowsPortrait");
-        rowsPortrait.setMin(1);
-        DialogSeekBarPreference columnsLandscape= (DialogSeekBarPreference) findPreference("drawerColumnsLandscape");
-        columnsLandscape.setMin(1);
-        DialogSeekBarPreference rowsLandscape= (DialogSeekBarPreference) findPreference("drawerRowsLandscape");
-        rowsLandscape.setMin(1);
-        DialogSeekBarPreference zoomSpeed= (DialogSeekBarPreference) findPreference("zoomSpeed");
-        zoomSpeed.setMin(300);
-        DialogSeekBarPreference uiScaleAB= (DialogSeekBarPreference) findPreference("uiScaleAB");
-        uiScaleAB.setMin(1);
         // wjax. Listen for changes in those ListPreference as if their values are BINDING_APP, then an app shall be selected via startActivityForResult
-        ListPreference swipedown_action = (ListPreference) findPreference("swipedownActions");
-        swipedown_action.setOnPreferenceChangeListener(this);
-        ListPreference swipeup_action = (ListPreference) findPreference("swipeupActions");
-        swipeup_action.setOnPreferenceChangeListener(this);
-        ListPreference homebutton_binding = (ListPreference) findPreference("homeBinding");
-        homebutton_binding.setOnPreferenceChangeListener(this);
-        CheckBoxPreference persist=(CheckBoxPreference)findPreference("systemPersistent");
-        persist.setOnPreferenceChangeListener(this);
-        Preference orientations=findPreference("homeOrientation");
-        if(AlmostNexusSettingsHelper.getSystemPersistent(this)){
-        	orientations.setEnabled(false);
-        }else{
-        	orientations.setEnabled(true);
-        }
+
         mContext=this;
-        //ADW: restart and reset preferences
-        Preference restart=findPreference("adw_restart");
+
         Preference reset=findPreference("adw_reset");
-        restart.setOnPreferenceClickListener(new OnPreferenceClickListener() {
-			public boolean onPreferenceClick(Preference preference) {
-				shouldRestart=true;
-				finish();
-				return false;
-			}
-		});
         reset.setOnPreferenceClickListener(new OnPreferenceClickListener() {
 			public boolean onPreferenceClick(Preference preference) {
                 AlertDialog alertDialog = new AlertDialog.Builder(mContext).create();
@@ -159,111 +116,6 @@ public class MyLauncherSettings extends PreferenceActivity implements OnPreferen
         	addPreferencesFromResource(R.xml.debugging_settings);
         }
 
-        //Changelog screen
-        Preference adw_version=findPreference("adw_version");
-        adw_version.setOnPreferenceClickListener(new OnPreferenceClickListener() {
-			public boolean onPreferenceClick(Preference preference) {
-		        try {
-		        	AlertDialog builder = AlmostNexusSettingsHelper.ChangelogDialogBuilder.create(mContext);
-		        	builder.show();
-		        } catch (Exception e) {
-		        	e.printStackTrace();
-		        }
-				return false;
-			}
-		});
-        //End restart/reset
-        Preference exportToXML = findPreference("xml_export");
-        exportToXML.setOnPreferenceClickListener(new OnPreferenceClickListener() {
-			public boolean onPreferenceClick(Preference preference) {
-                AlertDialog alertDialog = new AlertDialog.Builder(mContext).create();
-                alertDialog.setTitle(getResources().getString(R.string.title_dialog_xml));
-                alertDialog.setMessage(getResources().getString(R.string.message_dialog_export));
-                alertDialog.setButton(DialogInterface.BUTTON_POSITIVE, getResources().getString(android.R.string.ok),
-                    new DialogInterface.OnClickListener() {
-                    public void onClick(DialogInterface dialog, int which) {
-                        new ExportPrefsTask().execute();
-                    }
-                });
-                alertDialog.setButton(DialogInterface.BUTTON_NEGATIVE, getResources().getString(android.R.string.cancel),
-                    new DialogInterface.OnClickListener() {
-                    public void onClick(DialogInterface dialog, int which) {
-
-                    }
-                });
-                alertDialog.show();
-                return true;
-            }
-        });
-
-        Preference importFromXML = findPreference("xml_import");
-        importFromXML.setOnPreferenceClickListener(new OnPreferenceClickListener() {
-			public boolean onPreferenceClick(Preference preference) {
-                AlertDialog alertDialog = new AlertDialog.Builder(mContext).create();
-                alertDialog.setTitle(getResources().getString(R.string.title_dialog_xml));
-                alertDialog.setMessage(getResources().getString(R.string.message_dialog_import));
-                alertDialog.setButton(DialogInterface.BUTTON_POSITIVE, getResources().getString(android.R.string.ok),
-                    new DialogInterface.OnClickListener() {
-                    public void onClick(DialogInterface dialog, int which) {
-                        new ImportPrefsTask().execute();
-                    }
-                });
-                alertDialog.setButton(DialogInterface.BUTTON_NEGATIVE, getResources().getString(android.R.string.cancel),
-                    new DialogInterface.OnClickListener() {
-                    public void onClick(DialogInterface dialog, int which) {
-
-                    }
-                });
-                alertDialog.show();
-                return true;
-            }
-        });
-
-        Preference exportConfig = findPreference("db_export");
-        exportConfig.setOnPreferenceClickListener(new OnPreferenceClickListener() {
-			public boolean onPreferenceClick(Preference preference) {
-                AlertDialog alertDialog = new AlertDialog.Builder(mContext).create();
-                alertDialog.setTitle(getResources().getString(R.string.title_dialog_xml));
-                alertDialog.setMessage(getResources().getString(R.string.message_dialog_export_config));
-                alertDialog.setButton(DialogInterface.BUTTON_POSITIVE, getResources().getString(android.R.string.ok),
-                    new DialogInterface.OnClickListener() {
-                    public void onClick(DialogInterface dialog, int which) {
-                        new ExportDatabaseTask().execute();
-                    }
-                });
-                alertDialog.setButton(DialogInterface.BUTTON_NEGATIVE, getResources().getString(android.R.string.cancel),
-                    new DialogInterface.OnClickListener() {
-                    public void onClick(DialogInterface dialog, int which) {
-
-                    }
-                });
-                alertDialog.show();
-                return true;
-            }
-        });
-
-        Preference importConfig = findPreference("db_import");
-        importConfig.setOnPreferenceClickListener(new OnPreferenceClickListener() {
-			public boolean onPreferenceClick(Preference preference) {
-                AlertDialog alertDialog = new AlertDialog.Builder(mContext).create();
-                alertDialog.setTitle(getResources().getString(R.string.title_dialog_xml));
-                alertDialog.setMessage(getResources().getString(R.string.message_dialog_import_config));
-                alertDialog.setButton(DialogInterface.BUTTON_POSITIVE, getResources().getString(android.R.string.ok),
-                    new DialogInterface.OnClickListener() {
-                    public void onClick(DialogInterface dialog, int which) {
-                        new ImportDatabaseTask().execute();
-                    }
-                });
-                alertDialog.setButton(DialogInterface.BUTTON_NEGATIVE, getResources().getString(android.R.string.cancel),
-                    new DialogInterface.OnClickListener() {
-                    public void onClick(DialogInterface dialog, int which) {
-
-                    }
-                });
-                alertDialog.show();
-                return true;
-            }
-        });
         //TODO: ADW, theme settings
     	SharedPreferences sp=getPreferenceManager().getSharedPreferences();
     	final String themePackage=sp.getString("themePackageName", Launcher.THEME_DEFAULT);
