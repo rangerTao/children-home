@@ -1,84 +1,119 @@
 <?xml version="1.0" encoding="utf-8"?>
-<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
-        <!-- This PreferenceScreen tag serves as a screen break (similar to page break
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android" >
+
+    <!--
+             This PreferenceScreen tag serves as a screen break (similar to page break
              in word processing). Like for other preference types, we assign a key
-             here so it is able to save and restore its instance state. -->
-	<PreferenceScreen
-		android:key="screenPreferences"
-		android:title="@string/pref_title_screen_preferences"
-		android:summary="@string/pref_summary_screen_preferences">
-		<CheckBoxPreference android:title="@string/pref_title_hide_statusbar"
-			android:defaultValue="true"
-			android:summary="@string/pref_summary_hide_statusbar"
-			android:key="hideStatusbar" />
-		<CheckBoxPreference android:title="@string/pref_title_wallpaper_scrolling"
-			android:defaultValue="true"
-			android:summary="@string/pref_summary_wallpaper_scrolling"
-			android:key="wallpaper_scrolling" />
-		<PreferenceCategory
-            android:title="@string/pref_title_screens_preferencecategory">
-			<com.ranger.launcher.child.DialogSeekBarPreference
-				android:title="@string/pref_title_default_screen" android:summary="@string/pref_summary_default_screen"
-				android:dialogMessage="@string/pref_dialog_default_screen"
-				android:key="defaultScreen" android:defaultValue="2" android:max="4" />
-		</PreferenceCategory>
-		<PreferenceCategory
-            android:title="@string/pref_title_screens_layout_preferencecategory">
-			<CheckBoxPreference android:title="@string/pref_title_autosize_icons"
-				android:defaultValue="false"
-				android:summary="@string/pref_summary_autosize_icons"
-				android:key="autosizeIcons" />
-			<com.ranger.launcher.child.DialogSeekBarPreference
-				android:title="@string/pref_title_desktop_columns"
-				android:summary="@string/pref_summary_desktop_columns"
-				android:dialogMessage="@string/pref_dialog_desktop_columns"
-				android:key="desktopColumns" android:defaultValue="@integer/config_desktopColumns"
-				android:max="5" />
-			<com.ranger.launcher.child.DialogSeekBarPreference
-				android:title="@string/pref_title_desktop_rows"
-				android:summary="@string/pref_summary_desktop_rows"
-				android:dialogMessage="@string/pref_dialog_desktop_rows"
-				android:key="desktopRows" android:defaultValue="@integer/config_desktopRows"
-				android:max="5" />
-		</PreferenceCategory>
-		<PreferenceCategory
-            android:title="@string/pref_title_screens_behaviour_preferencecategory">
-			<com.ranger.launcher.child.DialogSeekBarPreference
-				android:title="@string/pref_title_desktop_scrolling_speed"
-				android:summary="@string/pref_summary_desktop_scrolling_speed"
-				android:dialogMessage="@string/pref_dialog_desktop_scrolling_speed"
-				android:key="desktopSpeed" android:defaultValue="@integer/config_desktopSpeed"
-				android:max="2000" />
-			<com.ranger.launcher.child.DialogSeekBarPreference
-				android:title="@string/pref_title_desktop_overshoot"
-				android:summary="@string/pref_summary_desktop_overshoot"
-				android:dialogMessage="@string/pref_dialog_desktop_overshoot"
-				android:key="desktopBounce" android:defaultValue="@integer/config_desktopBounce"
-				android:max="100" />
-		</PreferenceCategory>
-	</PreferenceScreen>
-	<PreferenceScreen
-		android:key="themePrefences"
-		android:summary="@string/pref_summary_theme_settings"
-		android:title="@string/pref_title_theme_settings">
-			<CheckBoxPreference android:key="themeIcons"
-				android:title="@string/pref_title_theme_icons"
-				android:summary="@string/pref_summary_theme_icons"
-				android:defaultValue="true" />
-			<ListPreference
-			  android:key="themePackageName"
-			  android:title="@string/pref_title_theme_package"
-			  android:summary="@string/pref_summary_theme_package"
-			  />
-    		<com.ranger.launcher.child.PreviewPreference
-    			android:layout="@layout/theme_preview"
-	    		android:key="themePreview" />
-		
-	</PreferenceScreen>	
-	<PreferenceCategory android:title="@string/pref_title_build_info">
-		<Preference
-			android:key="adw_reset"
-			android:title="@string/pref_title_adw_reset"
-			android:summary="@string/pref_summary_adw_reset"/>
-	</PreferenceCategory>
+             here so it is able to save and restore its instance state.
+    -->
+
+    <PreferenceScreen
+        android:key="timePreferences"
+        android:summary="@string/pref_summary_time_perferences"
+        android:title="@string/pref_titile_time_perferences" >
+         <com.ranger.launcher.child.DialogSeekBarPreference
+                android:defaultValue="@integer/config_desktopSpeed"
+                android:dialogMessage="@string/pref_dialog_desktop_scrolling_speed"
+                android:key="gameTime"
+                android:max="300"
+                android:summary="@string/pref_summary_desktop_scrolling_speed"
+                android:title="@string/pref_title_desktop_scrolling_speed" />
+          <com.ranger.launcher.child.DialogSeekBarPreference
+                android:defaultValue="@integer/config_desktopSpeed"
+                android:dialogMessage="@string/pref_dialog_desktop_scrolling_speed"
+                android:key="restTime"
+                android:max="500"
+                android:summary="@string/pref_summary_desktop_scrolling_speed"
+                android:title="@string/pref_title_desktop_scrolling_speed" />
+    </PreferenceScreen>
+    <PreferenceScreen
+        android:key="screenPreferences"
+        android:summary="@string/pref_summary_screen_preferences"
+        android:title="@string/pref_title_screen_preferences" >
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:key="hideStatusbar"
+            android:summary="@string/pref_summary_hide_statusbar"
+            android:title="@string/pref_title_hide_statusbar" />
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:key="wallpaper_scrolling"
+            android:summary="@string/pref_summary_wallpaper_scrolling"
+            android:title="@string/pref_title_wallpaper_scrolling" />
+
+        <PreferenceCategory android:title="@string/pref_title_screens_preferencecategory" >
+            <com.ranger.launcher.child.DialogSeekBarPreference
+                android:defaultValue="2"
+                android:dialogMessage="@string/pref_dialog_default_screen"
+                android:key="defaultScreen"
+                android:max="4"
+                android:summary="@string/pref_summary_default_screen"
+                android:title="@string/pref_title_default_screen" />
+        </PreferenceCategory>
+        <PreferenceCategory android:title="@string/pref_title_screens_layout_preferencecategory" >
+            <CheckBoxPreference
+                android:defaultValue="false"
+                android:key="autosizeIcons"
+                android:summary="@string/pref_summary_autosize_icons"
+                android:title="@string/pref_title_autosize_icons" />
+
+            <com.ranger.launcher.child.DialogSeekBarPreference
+                android:defaultValue="@integer/config_desktopColumns"
+                android:dialogMessage="@string/pref_dialog_desktop_columns"
+                android:key="desktopColumns"
+                android:max="5"
+                android:summary="@string/pref_summary_desktop_columns"
+                android:title="@string/pref_title_desktop_columns" />
+            <com.ranger.launcher.child.DialogSeekBarPreference
+                android:defaultValue="@integer/config_desktopRows"
+                android:dialogMessage="@string/pref_dialog_desktop_rows"
+                android:key="desktopRows"
+                android:max="5"
+                android:summary="@string/pref_summary_desktop_rows"
+                android:title="@string/pref_title_desktop_rows" />
+        </PreferenceCategory>
+        <PreferenceCategory android:title="@string/pref_title_screens_behaviour_preferencecategory" >
+            <com.ranger.launcher.child.DialogSeekBarPreference
+                android:defaultValue="@integer/config_desktopSpeed"
+                android:dialogMessage="@string/pref_dialog_desktop_scrolling_speed"
+                android:key="desktopSpeed"
+                android:max="2000"
+                android:summary="@string/pref_summary_desktop_scrolling_speed"
+                android:title="@string/pref_title_desktop_scrolling_speed" />
+            <com.ranger.launcher.child.DialogSeekBarPreference
+                android:defaultValue="@integer/config_desktopBounce"
+                android:dialogMessage="@string/pref_dialog_desktop_overshoot"
+                android:key="desktopBounce"
+                android:max="100"
+                android:summary="@string/pref_summary_desktop_overshoot"
+                android:title="@string/pref_title_desktop_overshoot" />
+        </PreferenceCategory>
+    </PreferenceScreen>
+    <PreferenceScreen
+        android:key="themePrefences"
+        android:summary="@string/pref_summary_theme_settings"
+        android:title="@string/pref_title_theme_settings" >
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:key="themeIcons"
+            android:summary="@string/pref_summary_theme_icons"
+            android:title="@string/pref_title_theme_icons" />
+
+        <ListPreference
+            android:key="themePackageName"
+            android:summary="@string/pref_summary_theme_package"
+            android:title="@string/pref_title_theme_package" />
+
+        <com.ranger.launcher.child.PreviewPreference
+            android:key="themePreview"
+            android:layout="@layout/theme_preview" />
+    </PreferenceScreen>
+
+    <PreferenceCategory android:title="@string/pref_title_build_info" >
+        <Preference
+            android:key="adw_reset"
+            android:summary="@string/pref_summary_adw_reset"
+            android:title="@string/pref_title_adw_reset" />
+    </PreferenceCategory>
+
 </PreferenceScreen>
