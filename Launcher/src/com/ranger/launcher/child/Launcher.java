@@ -517,8 +517,7 @@ public final class Launcher extends Activity implements View.OnClickListener, On
 		// which, depending on the target, might need to CREATE the actual
 		// target.
 
-		// For example, the user would PICK_SHORTCUT for "Music playlist", and
-		// we
+		// For example, the user would PICK_SHORTCUT for "Music playlist", and we
 		// launch over to the Music app to actually CREATE_SHORTCUT.
 
 		if (resultCode == RESULT_OK && mAddItemCellInfo != null) {
@@ -2174,8 +2173,8 @@ public final class Launcher extends Activity implements View.OnClickListener, On
 		// ADW: Show the changelog screen if needed
 		if (AlmostNexusSettingsHelper.shouldShowChangelog(this)) {
 			try {
-				AlertDialog builder = AlmostNexusSettingsHelper.ChangelogDialogBuilder.create(this);
-				builder.show();
+//				AlertDialog builder = AlmostNexusSettingsHelper.ChangelogDialogBuilder.create(this);
+//				builder.show();
 			} catch (Exception e) {
 				e.printStackTrace();
 			}
