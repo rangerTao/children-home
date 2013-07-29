@@ -377,6 +377,8 @@
 	<string name="pref_summary_theme_icons">Deselect this to use standard OS icons</string>
 	<string name="pref_themes_apply_theme">Apply theme!</string>
 	<string name="pref_themes_get_themes">Get themes!</string>
+	<string name="pref_summary_time_perferences">Set the time for rest or game.</string>
+	<string name="pref_titile_time_perferences">Time Setting</string>
 	
     <string name="pref_title_wallpaper_scrolling">Wallpaper Scrolling</string>
     <string name="pref_summary_wallpaper_scrolling">Allow wallpaper to move while scrolling screens</string>
